@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
 import {
   Accordion,
   AccordionDetails,
@@ -14,6 +14,8 @@ import {
   CircularProgress,
   Container,
   FormControlLabel,
+  IconButton,
+  Popover,
   Stack,
   Switch,
   Table,
@@ -29,6 +31,9 @@ import RefreshIcon from '@mui/icons-material/Refresh'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import SportsBaseballIcon from '@mui/icons-material/SportsBaseball'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
+import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
+import ChevronRightIcon from '@mui/icons-material/ChevronRight'
+import CalendarMonthIcon from '@mui/icons-material/CalendarMonth'
 
 const DODGERS_TEAM_ID = 119
 const NL_WEST_DIVISION_ID = 203
@@ -158,6 +163,72 @@ type StandingsResponse = {
 }
 
 const FINAL_STATUS_CODES = new Set(['F', 'FR', 'O', 'S', 'X'])
+
+const pacificIsoFormatter = new Intl.DateTimeFormat('en-CA', {
+  timeZone: 'America/Los_Angeles',
+})
+
+const pacificDisplayFormatter = new Intl.DateTimeFormat('en-US', {
+  dateStyle: 'full',
+  timeZone: 'America/Los_Angeles',
+})
+
+const pacificMonthFormatter = new Intl.DateTimeFormat('en-US', {
+  month: 'long',
+  year: 'numeric',
+  timeZone: 'America/Los_Angeles',
+})
+
+const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+const createDateFromIso = (isoDate: string) => {
+  const [year, month, day] = isoDate.split('-').map(Number)
+  if (
+    Number.isFinite(year) &&
+    Number.isFinite(month) &&
+    Number.isFinite(day)
+  ) {
+    return new Date(year, month - 1, day)
+  }
+
+  return new Date(isoDate)
+}
+
+const formatDisplayDate = (isoDate: string) =>
+  pacificDisplayFormatter.format(createDateFromIso(isoDate))
+
+const formatPacificIso = (date: Date) => pacificIsoFormatter.format(date)
+
+const startOfMonth = (date: Date) =>
+  new Date(date.getFullYear(), date.getMonth(), 1)
+
+const addMonths = (date: Date, delta: number) =>
+  startOfMonth(new Date(date.getFullYear(), date.getMonth() + delta, 1))
+
+const buildCalendarDays = (monthDate: Date) => {
+  const firstOfMonth = startOfMonth(monthDate)
+  const firstDayOffset = firstOfMonth.getDay()
+  const firstVisibleDate = new Date(firstOfMonth)
+  firstVisibleDate.setDate(firstVisibleDate.getDate() - firstDayOffset)
+
+  const days = [] as Array<{
+    date: Date
+    iso: string
+    inCurrentMonth: boolean
+  }>
+
+  for (let index = 0; index < 42; index += 1) {
+    const current = new Date(firstVisibleDate)
+    current.setDate(firstVisibleDate.getDate() + index)
+    days.push({
+      date: current,
+      iso: formatPacificIso(current),
+      inCurrentMonth: current.getMonth() === monthDate.getMonth(),
+    })
+  }
+
+  return days
+}
 
 const getPreviousDodgersDate = () => {
   const now = new Date()
@@ -369,7 +440,15 @@ const pickEmbedUrl = (playbacks?: Playback[]) => {
 }
 
 function App() {
-  const targetDate = useMemo(getPreviousDodgersDate, [])
+  const initialTargetDate = useMemo(getPreviousDodgersDate, [])
+  const [selectedDateIso, setSelectedDateIso] = useState(initialTargetDate.isoDate)
+  const [calendarMonth, setCalendarMonth] = useState(() =>
+    startOfMonth(createDateFromIso(initialTargetDate.isoDate)),
+  )
+  const [monthGames, setMonthGames] = useState<Record<string, RawGame[]>>({})
+  const [monthLoading, setMonthLoading] = useState(true)
+  const [monthError, setMonthError] = useState<string | null>(null)
+  const [calendarAnchorEl, setCalendarAnchorEl] = useState<HTMLElement | null>(null)
   const [gameDetails, setGameDetails] = useState<GameDetails | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -384,6 +463,18 @@ function App() {
   const [nlWestStandings, setNlWestStandings] = useState<StandingsTeamRecord[]>([])
   const [standingsLoading, setStandingsLoading] = useState(true)
   const [standingsError, setStandingsError] = useState<string | null>(null)
+
+  const selectedDisplayDate = useMemo(
+    () => formatDisplayDate(selectedDateIso),
+    [selectedDateIso],
+  )
+
+  const calendarDays = useMemo(
+    () => buildCalendarDays(calendarMonth),
+    [calendarMonth],
+  )
+
+  const calendarOpen = Boolean(calendarAnchorEl)
 
   const sortedNlWestStandings = useMemo(
     () =>
@@ -403,6 +494,81 @@ function App() {
       }),
     [nlWestStandings],
   )
+
+  useEffect(() => {
+    let active = true
+    const controller = new AbortController()
+
+    const fetchMonthGames = async () => {
+      setMonthLoading(true)
+      setMonthError(null)
+      setMonthGames({})
+
+      try {
+        const monthStart = startOfMonth(calendarMonth)
+        const monthEnd = new Date(
+          calendarMonth.getFullYear(),
+          calendarMonth.getMonth() + 1,
+          0,
+        )
+
+        const response = await fetch(
+          `${SCHEDULE_ENDPOINT}?sportId=1&teamId=${DODGERS_TEAM_ID}&startDate=${formatPacificIso(monthStart)}&endDate=${formatPacificIso(monthEnd)}`,
+          { signal: controller.signal },
+        )
+
+        if (!response.ok) {
+          throw new Error(`Schedule request failed (${response.status})`)
+        }
+
+        const scheduleData: ScheduleResponse = await response.json()
+        const gamesByDate: Record<string, RawGame[]> = {}
+
+        for (const scheduleDate of scheduleData.dates ?? []) {
+          for (const game of scheduleDate.games ?? []) {
+            const gameDate = new Date(game.gameDate)
+            if (Number.isNaN(gameDate.getTime())) {
+              continue
+            }
+
+            const iso = formatPacificIso(gameDate)
+            if (!gamesByDate[iso]) {
+              gamesByDate[iso] = []
+            }
+            gamesByDate[iso].push(game)
+          }
+        }
+
+        if (!active) {
+          return
+        }
+
+        setMonthGames(gamesByDate)
+      } catch (err) {
+        if (!active) {
+          return
+        }
+
+        const error = err as Error
+        if (error.name === 'AbortError') {
+          return
+        }
+
+        setMonthError(error.message)
+      } finally {
+        if (active) {
+          setMonthLoading(false)
+        }
+      }
+    }
+
+    fetchMonthGames()
+
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [calendarMonth, refreshToken])
 
   useEffect(() => {
     let active = true
@@ -603,7 +769,7 @@ function App() {
 
       try {
         const scheduleResponse = await fetch(
-          `${SCHEDULE_ENDPOINT}?sportId=1&teamId=${DODGERS_TEAM_ID}&startDate=${targetDate.isoDate}&endDate=${targetDate.isoDate}`,
+          `${SCHEDULE_ENDPOINT}?sportId=1&teamId=${DODGERS_TEAM_ID}&startDate=${selectedDateIso}&endDate=${selectedDateIso}`,
           { signal: controller.signal },
         )
 
@@ -696,8 +862,8 @@ function App() {
         }
 
         setGameDetails({
-          isoDate: targetDate.isoDate,
-          displayDate: targetDate.displayDate,
+          isoDate: selectedDateIso,
+          displayDate: selectedDisplayDate,
           opponent:
             opponentTeam?.teamName ?? opponentTeam?.name ?? 'Opposing Team',
           homeAway: dodgersAreHome ? 'home' : 'away',
@@ -744,10 +910,38 @@ function App() {
       active = false
       controller.abort()
     }
-  }, [targetDate.isoDate, targetDate.displayDate, refreshToken])
+  }, [selectedDateIso, selectedDisplayDate, refreshToken])
 
   const handleRefresh = () => {
     setRefreshToken((token) => token + 1)
+  }
+
+  const handleCalendarButtonClick = (event: ReactMouseEvent<HTMLElement>) => {
+    setCalendarAnchorEl((current) => (current ? null : event.currentTarget))
+  }
+
+  const handleCalendarClose = () => {
+    setCalendarAnchorEl(null)
+  }
+
+  const handleMonthShift = (delta: number) => {
+    setCalendarMonth((current) => addMonths(current, delta))
+  }
+
+  const handleDateSelect = (isoDate: string) => {
+    setSelectedDateIso(isoDate)
+    setCalendarMonth((current) => {
+      const nextMonth = startOfMonth(createDateFromIso(isoDate))
+      if (
+        nextMonth.getFullYear() === current.getFullYear() &&
+        nextMonth.getMonth() === current.getMonth()
+      ) {
+        return current
+      }
+
+      return nextMonth
+    })
+    setCalendarAnchorEl(null)
   }
 
   const outcomeColor =
@@ -765,6 +959,16 @@ function App() {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             Dodgers Daily Replay
           </Typography>
+          <Button
+            color="inherit"
+            startIcon={<CalendarMonthIcon />}
+            onClick={handleCalendarButtonClick}
+            aria-haspopup="true"
+            aria-expanded={calendarOpen ? 'true' : undefined}
+            sx={{ mr: 2, whiteSpace: 'nowrap' }}
+          >
+            Select Game Date
+          </Button>
           <FormControlLabel
             control={
               <Switch
@@ -786,6 +990,143 @@ function App() {
           </Button>
         </Toolbar>
       </AppBar>
+
+      <Popover
+        open={calendarOpen}
+        anchorEl={calendarAnchorEl}
+        onClose={handleCalendarClose}
+        anchorOrigin={{ vertical: 'bottom', horizontal: 'left' }}
+        transformOrigin={{ vertical: 'top', horizontal: 'left' }}
+        PaperProps={{
+          sx: {
+            width: 360,
+            maxWidth: '90vw',
+            p: 2,
+            borderRadius: 2,
+          },
+        }}
+      >
+        <Stack spacing={2}>
+          <Stack direction="row" alignItems="center" justifyContent="space-between">
+            <IconButton
+              aria-label="Previous month"
+              onClick={() => handleMonthShift(-1)}
+              size="small"
+            >
+              <ChevronLeftIcon />
+            </IconButton>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Typography variant="h6">
+                {pacificMonthFormatter.format(calendarMonth)}
+              </Typography>
+              {monthLoading && <CircularProgress size={18} thickness={5} />}
+            </Stack>
+            <IconButton
+              aria-label="Next month"
+              onClick={() => handleMonthShift(1)}
+              size="small"
+            >
+              <ChevronRightIcon />
+            </IconButton>
+          </Stack>
+          <Typography variant="body2" color="text.secondary">
+            Selected Game: {selectedDisplayDate}
+          </Typography>
+          {monthError && (
+            <Alert severity="warning">
+              Unable to mark game days right now. {monthError}
+            </Alert>
+          )}
+          <Box
+            sx={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(7, minmax(0, 1fr))',
+              gap: 1,
+            }}
+          >
+            {WEEKDAY_LABELS.map((label) => (
+              <Typography
+                key={label}
+                variant="caption"
+                textAlign="center"
+                color="text.secondary"
+                sx={{ fontWeight: 600 }}
+              >
+                {label}
+              </Typography>
+            ))}
+            {calendarDays.map((day) => {
+              const isSelected = day.iso === selectedDateIso
+              const hasGame = Boolean(monthGames[day.iso]?.length)
+
+              return (
+                <Box
+                  key={day.iso}
+                  component="button"
+                  type="button"
+                  onClick={() => handleDateSelect(day.iso)}
+                  sx={{
+                    display: 'flex',
+                    flexDirection: 'column',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    gap: 0.75,
+                    px: 0.5,
+                    py: 1,
+                    borderRadius: 1.5,
+                    border: '1px solid',
+                    borderColor: isSelected ? 'primary.main' : 'divider',
+                    bgcolor: isSelected
+                      ? 'primary.main'
+                      : day.inCurrentMonth
+                        ? 'background.paper'
+                        : 'background.default',
+                    color: isSelected
+                      ? 'primary.contrastText'
+                      : day.inCurrentMonth
+                        ? 'text.primary'
+                        : 'text.secondary',
+                    opacity: day.inCurrentMonth ? 1 : 0.7,
+                    cursor: 'pointer',
+                    textDecoration: 'none',
+                    outline: 'none',
+                    transition: 'border-color 0.2s ease, background-color 0.2s ease',
+                    font: 'inherit',
+                    width: '100%',
+                    margin: 0,
+                    minHeight: 64,
+                    '&:hover': {
+                      borderColor: 'primary.main',
+                    },
+                  }}
+                >
+                  <Typography
+                    variant="body2"
+                    fontWeight={isSelected ? 700 : undefined}
+                  >
+                    {day.date.getDate()}
+                  </Typography>
+                  {hasGame && (
+                    <Box
+                      sx={{
+                        width: 8,
+                        height: 8,
+                        borderRadius: '50%',
+                        bgcolor: isSelected
+                          ? 'primary.contrastText'
+                          : 'success.main',
+                      }}
+                    />
+                  )}
+                </Box>
+              )
+            })}
+          </Box>
+          <Button onClick={handleCalendarClose} variant="outlined" size="small">
+            Close
+          </Button>
+        </Stack>
+      </Popover>
 
       <Container maxWidth="md" sx={{ py: { xs: 3, md: 6 } }}>
         <Stack spacing={3}>
@@ -820,7 +1161,7 @@ function App() {
             )}
           </Box>
           <Typography variant="h4" component="h1" textAlign="center">
-            Previous Game - {targetDate.displayDate}
+            Condensed Game - {selectedDisplayDate}
           </Typography>
 
           {loading && (
@@ -844,7 +1185,7 @@ function App() {
 
           {noGame && !loading && (
             <Alert severity="info">
-              The Dodgers did not play on {targetDate.displayDate}. Check back
+              The Dodgers did not play on {selectedDisplayDate}. Check back
               after the next game.
             </Alert>
           )}
@@ -924,7 +1265,7 @@ function App() {
                         src={gameDetails.embedUrl}
                         title={
                           gameDetails.headline ??
-                          `Dodgers condensed game ${targetDate.displayDate}`
+                          `Dodgers condensed game ${selectedDisplayDate}`
                         }
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
                         allowFullScreen
@@ -964,7 +1305,7 @@ function App() {
               </CardContent>
             </Card>
           )}
-          <Accordion defaultExpanded>
+          <Accordion>
             <AccordionSummary
               expandIcon={<ExpandMoreIcon />}
               aria-controls="nl-west-standings"
