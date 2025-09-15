@@ -10,7 +10,9 @@ import {
   Chip,
   CircularProgress,
   Container,
+  FormControlLabel,
   Stack,
+  Switch,
   Toolbar,
   Typography,
 } from '@mui/material'
@@ -226,6 +228,7 @@ function App() {
   const [error, setError] = useState<string | null>(null)
   const [noGame, setNoGame] = useState(false)
   const [refreshToken, setRefreshToken] = useState(0)
+  const [showSpoilers, setShowSpoilers] = useState(false)
 
   useEffect(() => {
     let active = true
@@ -401,6 +404,17 @@ function App() {
           <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
             Dodgers Daily Replay
           </Typography>
+          <FormControlLabel
+            control={
+              <Switch
+                color="default"
+                checked={showSpoilers}
+                onChange={(event) => setShowSpoilers(event.target.checked)}
+              />
+            }
+            label="Spoilers"
+            sx={{ color: 'inherit', mr: 2 }}
+          />
           <Button
             color="inherit"
             onClick={handleRefresh}
@@ -458,7 +472,7 @@ function App() {
               <CardContent>
                 <Stack spacing={2.5}>
                   <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap">
-                    {gameDetails.outcome && (
+                    {showSpoilers && gameDetails.outcome && (
                       <Chip
                         label={`Dodgers ${gameDetails.outcome}`}
                         color={outcomeColor}
@@ -470,7 +484,17 @@ function App() {
                     )}
                   </Stack>
 
-                  {typeof gameDetails.dodgersScore === 'number' &&
+                  {!showSpoilers &&
+                    (gameDetails.outcome ||
+                      (typeof gameDetails.dodgersScore === 'number' &&
+                        typeof gameDetails.opponentScore === 'number')) && (
+                      <Typography variant="body2" color="text.secondary">
+                        Spoilers hidden. Toggle above to reveal the final score.
+                      </Typography>
+                    )}
+
+                  {showSpoilers &&
+                    typeof gameDetails.dodgersScore === 'number' &&
                     typeof gameDetails.opponentScore === 'number' && (
                       <Typography variant="h6">
                         Final Score: Dodgers {gameDetails.dodgersScore} -{' '}
