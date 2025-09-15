@@ -1,5 +1,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import {
+  Accordion,
+  AccordionDetails,
+  AccordionSummary,
   Alert,
   AppBar,
   Box,
@@ -13,14 +16,22 @@ import {
   FormControlLabel,
   Stack,
   Switch,
+  Table,
+  TableBody,
+  TableCell,
+  TableContainer,
+  TableHead,
+  TableRow,
   Toolbar,
   Typography,
 } from '@mui/material'
 import RefreshIcon from '@mui/icons-material/Refresh'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import SportsBaseballIcon from '@mui/icons-material/SportsBaseball'
+import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
 
 const DODGERS_TEAM_ID = 119
+const NL_WEST_DIVISION_ID = 203
 const SCHEDULE_ENDPOINT = 'https://statsapi.mlb.com/api/v1/schedule'
 const GAME_CONTENT_ENDPOINT = 'https://statsapi.mlb.com/api/v1/game'
 const STANDINGS_ENDPOINT = 'https://statsapi.mlb.com/api/v1/standings'
@@ -123,11 +134,18 @@ type NextGameDetails = {
 type StandingsTeamRecord = {
   team?: {
     id?: number
+    name?: string
+    teamName?: string
+    shortName?: string
+    abbreviation?: string
   }
   wins?: number
   losses?: number
+  winningPercentage?: string
+  gamesBack?: string
   divisionRank?: string
   division?: {
+    id?: number
     nameShort?: string
     name?: string
   }
@@ -221,6 +239,41 @@ const formatOpponentStanding = (record?: StandingsTeamRecord) => {
 
   return parts.join(', ')
 }
+
+const formatWinningPercentage = (
+  winningPercentage?: string,
+  wins?: number,
+  losses?: number,
+) => {
+  if (winningPercentage) {
+    const trimmed = winningPercentage.trim()
+    if (trimmed) {
+      const numeric = Number(trimmed)
+      if (Number.isFinite(numeric)) {
+        return numeric.toFixed(3).replace(/^0/, '.')
+      }
+      if (/^\.\d+$/.test(trimmed)) {
+        return trimmed
+      }
+    }
+  }
+
+  if (typeof wins === 'number' && typeof losses === 'number') {
+    const total = wins + losses
+    if (total > 0) {
+      return (wins / total).toFixed(3).replace(/^0/, '.')
+    }
+  }
+
+  return undefined
+}
+
+const getTeamDisplayName = (record: StandingsTeamRecord) =>
+  record.team?.teamName ??
+  record.team?.name ??
+  record.team?.shortName ??
+  record.team?.abbreviation ??
+  'Team'
 
 const isCompletedGame = (game: RawGame) => {
   const statusCode = game.status?.statusCode?.toUpperCase() ?? ''
@@ -328,6 +381,99 @@ function App() {
   const [nextGameLoading, setNextGameLoading] = useState(true)
   const [nextGameError, setNextGameError] = useState<string | null>(null)
   const [noUpcomingGame, setNoUpcomingGame] = useState(false)
+  const [nlWestStandings, setNlWestStandings] = useState<StandingsTeamRecord[]>([])
+  const [standingsLoading, setStandingsLoading] = useState(true)
+  const [standingsError, setStandingsError] = useState<string | null>(null)
+
+  const sortedNlWestStandings = useMemo(
+    () =>
+      [...nlWestStandings].sort((a, b) => {
+        const rankA = Number(a.divisionRank)
+        const rankB = Number(b.divisionRank)
+        if (Number.isFinite(rankA) && Number.isFinite(rankB)) {
+          return rankA - rankB
+        }
+        if (Number.isFinite(rankA)) {
+          return -1
+        }
+        if (Number.isFinite(rankB)) {
+          return 1
+        }
+        return getTeamDisplayName(a).localeCompare(getTeamDisplayName(b))
+      }),
+    [nlWestStandings],
+  )
+
+  useEffect(() => {
+    let active = true
+    const controller = new AbortController()
+
+    const fetchStandings = async () => {
+      setStandingsLoading(true)
+      setStandingsError(null)
+      setNlWestStandings([])
+
+      try {
+        const season = getPacificNow().getFullYear()
+        const response = await fetch(
+          `${STANDINGS_ENDPOINT}?leagueId=104&season=${season}&standingsTypes=regularSeason`,
+          { signal: controller.signal },
+        )
+
+        if (!response.ok) {
+          throw new Error(`Standings request failed (${response.status})`)
+        }
+
+        const standingsData: StandingsResponse = await response.json()
+        const records =
+          standingsData.records
+            ?.flatMap((record) => record.teamRecords ?? [])
+            .filter((record) => {
+              const divisionId = record.division?.id
+              if (typeof divisionId === 'number') {
+                return divisionId === NL_WEST_DIVISION_ID
+              }
+
+              const divisionName =
+                record.division?.nameShort ?? record.division?.name ?? ''
+              return divisionName.toLowerCase().includes('west')
+            }) ?? []
+
+        if (!active) {
+          return
+        }
+
+        if (records.length === 0) {
+          setStandingsError('Standings data is not available right now.')
+          return
+        }
+
+        setNlWestStandings(records)
+      } catch (err) {
+        if (!active) {
+          return
+        }
+
+        const error = err as Error
+        if (error.name === 'AbortError') {
+          return
+        }
+
+        setStandingsError(error.message)
+      } finally {
+        if (active) {
+          setStandingsLoading(false)
+        }
+      }
+    }
+
+    fetchStandings()
+
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [refreshToken])
 
   useEffect(() => {
     let active = true
@@ -818,6 +964,96 @@ function App() {
               </CardContent>
             </Card>
           )}
+          <Accordion defaultExpanded>
+            <AccordionSummary
+              expandIcon={<ExpandMoreIcon />}
+              aria-controls="nl-west-standings"
+              id="nl-west-standings-header"
+            >
+              <Typography variant="h6" sx={{ flexGrow: 1 }}>
+                NL West Standings
+              </Typography>
+              {!standingsLoading && !standingsError && (
+                <Typography variant="body2" color="text.secondary">
+                  {`Updated ${new Intl.DateTimeFormat('en-US', {
+                    dateStyle: 'medium',
+                    timeStyle: 'short',
+                  }).format(getPacificNow())}`}
+                </Typography>
+              )}
+            </AccordionSummary>
+            <AccordionDetails>
+              {standingsLoading ? (
+                <Box display="flex" justifyContent="center" py={2}>
+                  <CircularProgress size={24} />
+                </Box>
+              ) : standingsError ? (
+                <Alert
+                  severity="error"
+                  action={
+                    <Button color="inherit" size="small" onClick={handleRefresh}>
+                      Retry
+                    </Button>
+                  }
+                >
+                  Unable to load the NL West standings. {standingsError}
+                </Alert>
+              ) : sortedNlWestStandings.length === 0 ? (
+                <Typography variant="body2" color="text.secondary">
+                  Standings data is not available right now.
+                </Typography>
+              ) : (
+                <TableContainer>
+                  <Table size="small" aria-label="NL West standings">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Team</TableCell>
+                        <TableCell align="right">W</TableCell>
+                        <TableCell align="right">L</TableCell>
+                        <TableCell align="right">Pct</TableCell>
+                        <TableCell align="right">GB</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {sortedNlWestStandings.map((record) => {
+                        const wins =
+                          typeof record.wins === 'number'
+                            ? record.wins
+                            : undefined
+                        const losses =
+                          typeof record.losses === 'number'
+                            ? record.losses
+                            : undefined
+                        const pct =
+                          formatWinningPercentage(
+                            record.winningPercentage,
+                            wins,
+                            losses,
+                          ) ?? '--'
+                        const gamesBack = record.gamesBack?.trim() || '--'
+
+                        return (
+                          <TableRow key={record.team?.id ?? getTeamDisplayName(record)}>
+                            <TableCell component="th" scope="row">
+                              {getTeamDisplayName(record)}
+                            </TableCell>
+                            <TableCell align="right">
+                              {typeof wins === 'number' ? wins : '--'}
+                            </TableCell>
+                            <TableCell align="right">
+                              {typeof losses === 'number' ? losses : '--'}
+                            </TableCell>
+                            <TableCell align="right">{pct}</TableCell>
+                            <TableCell align="right">{gamesBack}</TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
+            </AccordionDetails>
+          </Accordion>
         </Stack>
       </Container>
     </Box>
