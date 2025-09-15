@@ -23,6 +23,7 @@ import SportsBaseballIcon from '@mui/icons-material/SportsBaseball'
 const DODGERS_TEAM_ID = 119
 const SCHEDULE_ENDPOINT = 'https://statsapi.mlb.com/api/v1/schedule'
 const GAME_CONTENT_ENDPOINT = 'https://statsapi.mlb.com/api/v1/game'
+const STANDINGS_ENDPOINT = 'https://statsapi.mlb.com/api/v1/standings'
 const FALLBACK_STREAMABLE =
   'https://streamable.com/m/condensed-game-lad-sf-9-14-25?partnerId=web_video-playback-page_video-share'
 
@@ -110,6 +111,34 @@ type GameDetails = {
   description?: string
 }
 
+type NextGameDetails = {
+  isoDate: string
+  displayDateTime: string
+  opponent: string
+  homeAway: 'home' | 'away'
+  venue?: string
+  opponentStanding?: string
+}
+
+type StandingsTeamRecord = {
+  team?: {
+    id?: number
+  }
+  wins?: number
+  losses?: number
+  divisionRank?: string
+  division?: {
+    nameShort?: string
+    name?: string
+  }
+}
+
+type StandingsResponse = {
+  records?: Array<{
+    teamRecords?: StandingsTeamRecord[]
+  }>
+}
+
 const FINAL_STATUS_CODES = new Set(['F', 'FR', 'O', 'S', 'X'])
 
 const getPreviousDodgersDate = () => {
@@ -126,6 +155,71 @@ const getPreviousDodgersDate = () => {
     timeZone: 'America/Los_Angeles',
   }).format(pacificNow)
   return { isoDate, displayDate }
+}
+
+const getPacificNow = () =>
+  new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }))
+
+const formatUpcomingGameDateTime = (isoDate: string) => {
+  const date = new Date(isoDate)
+  const dateFormatter = new Intl.DateTimeFormat('en-US', {
+    weekday: 'long',
+    month: 'long',
+    day: 'numeric',
+    timeZone: 'America/Los_Angeles',
+  })
+  const timeFormatter = new Intl.DateTimeFormat('en-US', {
+    hour: 'numeric',
+    minute: '2-digit',
+    timeZone: 'America/Los_Angeles',
+  })
+
+  return `${dateFormatter.format(date)} at ${timeFormatter.format(date)} PT`
+}
+
+const ordinalRules = new Intl.PluralRules('en', { type: 'ordinal' })
+const ordinalSuffixes: Record<string, string> = {
+  one: 'st',
+  two: 'nd',
+  few: 'rd',
+  other: 'th',
+}
+
+const formatOrdinal = (value?: string | number) => {
+  const numericValue = Number(value)
+  if (!Number.isFinite(numericValue)) {
+    return undefined
+  }
+
+  const suffix = ordinalSuffixes[ordinalRules.select(numericValue)] ?? 'th'
+  return `${numericValue}${suffix}`
+}
+
+const formatOpponentStanding = (record?: StandingsTeamRecord) => {
+  if (!record) {
+    return undefined
+  }
+
+  const wins = typeof record.wins === 'number' ? record.wins : undefined
+  const losses = typeof record.losses === 'number' ? record.losses : undefined
+  const divisionRank = formatOrdinal(record.divisionRank)
+  const divisionName = record.division?.nameShort ?? record.division?.name
+
+  const parts: string[] = []
+  if (typeof wins === 'number' && typeof losses === 'number') {
+    parts.push(`${wins}-${losses}`)
+  }
+  if (divisionRank && divisionName) {
+    parts.push(`${divisionRank} in ${divisionName}`)
+  } else if (divisionRank) {
+    parts.push(`${divisionRank} place`)
+  }
+
+  if (parts.length === 0) {
+    return undefined
+  }
+
+  return parts.join(', ')
 }
 
 const isCompletedGame = (game: RawGame) => {
@@ -229,6 +323,127 @@ function App() {
   const [noGame, setNoGame] = useState(false)
   const [refreshToken, setRefreshToken] = useState(0)
   const [showSpoilers, setShowSpoilers] = useState(false)
+  const [nextGameDetails, setNextGameDetails] =
+    useState<NextGameDetails | null>(null)
+  const [nextGameLoading, setNextGameLoading] = useState(true)
+  const [nextGameError, setNextGameError] = useState<string | null>(null)
+  const [noUpcomingGame, setNoUpcomingGame] = useState(false)
+
+  useEffect(() => {
+    let active = true
+    const controller = new AbortController()
+
+    const fetchNextGame = async () => {
+      setNextGameLoading(true)
+      setNextGameError(null)
+      setNoUpcomingGame(false)
+      setNextGameDetails(null)
+
+      try {
+        const pacificNow = getPacificNow()
+        const startDate = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Los_Angeles',
+        }).format(pacificNow)
+        const endDateTarget = new Date(pacificNow)
+        endDateTarget.setDate(endDateTarget.getDate() + 14)
+        const endDate = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Los_Angeles',
+        }).format(endDateTarget)
+
+        const response = await fetch(
+          `${SCHEDULE_ENDPOINT}?sportId=1&teamId=${DODGERS_TEAM_ID}&startDate=${startDate}&endDate=${endDate}`,
+          { signal: controller.signal },
+        )
+
+        if (!response.ok) {
+          throw new Error(`Next game request failed (${response.status})`)
+        }
+
+        const scheduleData: ScheduleResponse = await response.json()
+        const games =
+          scheduleData.dates?.flatMap((date) => date.games ?? []) ?? []
+        const nowTime = pacificNow.getTime()
+        const upcomingGame = [...games]
+          .filter((game) => !isCompletedGame(game))
+          .filter((game) => new Date(game.gameDate).getTime() >= nowTime)
+          .sort(
+            (a, b) =>
+              new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime(),
+          )[0]
+
+        if (!upcomingGame) {
+          if (active) {
+            setNoUpcomingGame(true)
+          }
+          return
+        }
+
+        const dodgersAreHome =
+          upcomingGame.teams.home.team.id === DODGERS_TEAM_ID
+        const opponentTeam =
+          upcomingGame.teams[dodgersAreHome ? 'away' : 'home'].team
+        const opponentName =
+          opponentTeam?.teamName ?? opponentTeam?.name ?? 'Opposing Team'
+        let opponentStanding: string | undefined
+
+        try {
+          const season = new Date(upcomingGame.gameDate).getFullYear()
+          const standingsResponse = await fetch(
+            `${STANDINGS_ENDPOINT}?leagueId=103,104&season=${season}&standingsTypes=regularSeason`,
+            { signal: controller.signal },
+          )
+
+          if (standingsResponse.ok) {
+            const standingsData: StandingsResponse =
+              await standingsResponse.json()
+            const standingsRecord = standingsData.records
+              ?.flatMap((record) => record.teamRecords ?? [])
+              .find((record) => record.team?.id === opponentTeam.id)
+            opponentStanding = formatOpponentStanding(standingsRecord)
+          }
+        } catch (standingsError) {
+          if ((standingsError as Error).name !== 'AbortError') {
+            console.error(standingsError)
+          }
+        }
+
+        if (!active) {
+          return
+        }
+
+        setNextGameDetails({
+          isoDate: upcomingGame.gameDate,
+          displayDateTime: formatUpcomingGameDateTime(upcomingGame.gameDate),
+          opponent: opponentName,
+          homeAway: dodgersAreHome ? 'home' : 'away',
+          venue: upcomingGame.venue?.name,
+          opponentStanding,
+        })
+      } catch (err) {
+        if (!active) {
+          return
+        }
+
+        const error = err as Error
+        if (error.name === 'AbortError') {
+          return
+        }
+
+        setNextGameError(error.message)
+      } finally {
+        if (active) {
+          setNextGameLoading(false)
+        }
+      }
+    }
+
+    fetchNextGame()
+
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [refreshToken])
 
   useEffect(() => {
     let active = true
@@ -428,6 +643,36 @@ function App() {
 
       <Container maxWidth="md" sx={{ py: { xs: 3, md: 6 } }}>
         <Stack spacing={3}>
+          <Box textAlign="center">
+            {nextGameLoading && (
+              <Typography variant="body2" color="text.secondary">
+                Loading next game details...
+              </Typography>
+            )}
+            {nextGameError && !nextGameLoading && (
+              <Typography variant="body2" color="error">
+                Unable to load the next game right now. {nextGameError}
+              </Typography>
+            )}
+            {noUpcomingGame && !nextGameLoading && (
+              <Typography variant="body2" color="text.secondary">
+                No upcoming Dodgers games are currently on the schedule.
+              </Typography>
+            )}
+            {nextGameDetails && !nextGameLoading && (
+              <Typography variant="subtitle1">
+                {`Next Game: Dodgers ${
+                  nextGameDetails.homeAway === 'home' ? 'vs' : '@'
+                } ${nextGameDetails.opponent} - ${nextGameDetails.displayDateTime}`}
+                {nextGameDetails.venue
+                  ? ` | ${nextGameDetails.venue}`
+                  : ''}
+                {nextGameDetails.opponentStanding
+                  ? ` (${nextGameDetails.opponent}: ${nextGameDetails.opponentStanding})`
+                  : ''}
+              </Typography>
+            )}
+          </Box>
           <Typography variant="h4" component="h1" textAlign="center">
             Previous Game - {targetDate.displayDate}
           </Typography>
