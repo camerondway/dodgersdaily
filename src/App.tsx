@@ -1157,7 +1157,7 @@ function App() {
       active = false
       controller.abort()
     }
-  }, [refreshToken])
+  }, [refreshToken, systemTimeZone])
 
   useEffect(() => {
     let active = true
@@ -1285,7 +1285,7 @@ function App() {
       active = false
       controller.abort()
     }
-  }, [refreshToken])
+  }, [refreshToken, systemTimeZone])
 
   useEffect(() => {
     if (!nextGameDetails) {
