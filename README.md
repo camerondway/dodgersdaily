@@ -27,6 +27,13 @@ npm run preview
 
 `npm run build` compiles the application into the `dist` directory. Use `npm run preview` to serve the production bundle locally.
 
+## Deployment (GitHub Pages)
+
+1. Make sure the default branch is `main` and push the latest changes.
+2. In GitHub, open **Settings → Pages** and set the source to **GitHub Actions**.
+3. The workflow in `.github/workflows/deploy.yml` builds the site with Vite and publishes the `dist` bundle to GitHub Pages each time `main` is updated (or when run manually).
+4. Your site will be available at `https://<your-username>.github.io/dodgers-daily/` after the workflow finishes.
+
 ## Notes
 
 - The app queries the public MLB Stats API from the browser at runtime. No API key is required.
