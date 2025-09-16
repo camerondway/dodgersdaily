@@ -1316,6 +1316,24 @@ function App() {
     }
   }, [applyDateSelection, latestGameIso])
 
+  useEffect(() => {
+    if (typeof document === 'undefined') {
+      return
+    }
+
+    const baseTitle = 'DodgersDaily'
+    const details = gameDetails ?? nextGameDetails
+    const opponent = details?.opponent?.trim()
+    const prefix = details?.homeAway === 'away' ? '@' : 'vs'
+    const nextTitle = opponent ? `${baseTitle} ${prefix} ${opponent}` : baseTitle
+
+    document.title = nextTitle
+
+    return () => {
+      document.title = baseTitle
+    }
+  }, [gameDetails, nextGameDetails])
+
   const handleRetry = () => {
     setRefreshToken((token) => token + 1)
   }
