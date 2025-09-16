@@ -1799,7 +1799,7 @@ function App() {
                   : ''}
               </Typography>
             )}
-            
+            {showDodgerBaseballButton && (
               <Box display="flex" justifyContent="center" mt={2}>
                 <Button
                   variant="contained"
@@ -1810,7 +1810,7 @@ function App() {
                   its time for dodger baseball!
                 </Button>
               </Box>
-
+            )}
             {dodgersStandingsText && (
               <Typography variant="h5" color="text.secondary">
                 {`Dodgers Record: ${dodgersStandingsText}`}
