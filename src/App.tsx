@@ -49,7 +49,6 @@ import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import CalendarMonthIcon from '@mui/icons-material/CalendarMonth'
 
 const DODGERS_TEAM_ID = 119
-const NL_WEST_DIVISION_ID = 203
 const SCHEDULE_ENDPOINT = 'https://statsapi.mlb.com/api/v1/schedule'
 const GAME_CONTENT_ENDPOINT = 'https://statsapi.mlb.com/api/v1/game'
 const STANDINGS_ENDPOINT = 'https://statsapi.mlb.com/api/v1/standings'
@@ -171,10 +170,36 @@ type StandingsTeamRecord = {
   }
 }
 
+type StandingsRecord = {
+  league?: {
+    id?: number
+    name?: string
+    nameShort?: string
+    abbreviation?: string
+  }
+  division?: {
+    id?: number
+    nameShort?: string
+    name?: string
+  }
+  teamRecords?: StandingsTeamRecord[]
+}
+
 type StandingsResponse = {
-  records?: Array<{
-    teamRecords?: StandingsTeamRecord[]
-  }>
+  records?: StandingsRecord[]
+}
+
+type DivisionStandingsGroup = {
+  divisionId?: number
+  name: string
+  fullName?: string
+  teamRecords: StandingsTeamRecord[]
+}
+
+type LeagueStandingsGroup = {
+  leagueId?: number
+  name: string
+  divisions: DivisionStandingsGroup[]
 }
 
 const FINAL_STATUS_CODES = new Set(['F', 'FR', 'O', 'S', 'X'])
@@ -211,6 +236,23 @@ const pacificOffsetFormatter = new Intl.DateTimeFormat('en-US', {
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
 
 const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+const LEAGUE_NAME_OVERRIDES: Record<number, string> = {
+  103: 'American League',
+  104: 'National League',
+}
+
+const DIVISION_NAME_OVERRIDES: Record<
+  number,
+  { name: string; fullName: string }
+> = {
+  200: { name: 'AL West', fullName: 'American League West' },
+  201: { name: 'AL East', fullName: 'American League East' },
+  202: { name: 'AL Central', fullName: 'American League Central' },
+  203: { name: 'NL West', fullName: 'National League West' },
+  204: { name: 'NL East', fullName: 'National League East' },
+  205: { name: 'NL Central', fullName: 'National League Central' },
+}
 
 const getDateFromLocation = () => {
   if (typeof window === 'undefined') {
@@ -499,6 +541,84 @@ const getTeamDisplayName = (record: StandingsTeamRecord) =>
   record.team?.abbreviation ??
   'Team'
 
+const sortStandingsTeamRecords = (records: StandingsTeamRecord[]) =>
+  [...records].sort((a, b) => {
+    const rankA = Number(a.divisionRank)
+    const rankB = Number(b.divisionRank)
+    if (Number.isFinite(rankA) && Number.isFinite(rankB)) {
+      return rankA - rankB
+    }
+    if (Number.isFinite(rankA)) {
+      return -1
+    }
+    if (Number.isFinite(rankB)) {
+      return 1
+    }
+    return getTeamDisplayName(a).localeCompare(getTeamDisplayName(b))
+  })
+
+const getLeagueDisplayName = (league?: {
+  id?: number
+  name?: string
+  nameShort?: string
+  abbreviation?: string
+}) => {
+  const id = league?.id
+  if (typeof id === 'number' && LEAGUE_NAME_OVERRIDES[id]) {
+    return { id, name: LEAGUE_NAME_OVERRIDES[id] }
+  }
+
+  const name =
+    league?.name?.trim() ||
+    league?.nameShort?.trim() ||
+    league?.abbreviation?.trim() ||
+    'League'
+
+  return { id, name }
+}
+
+const getDivisionDisplayNames = (
+  division?: {
+    id?: number
+    nameShort?: string
+    name?: string
+  },
+  leagueName?: string,
+) => {
+  const id = division?.id
+  if (typeof id === 'number' && DIVISION_NAME_OVERRIDES[id]) {
+    const override = DIVISION_NAME_OVERRIDES[id]
+    return { id, name: override.name, fullName: override.fullName }
+  }
+
+  const shortName = division?.nameShort?.trim()
+  const fullName = division?.name?.trim()
+
+  if (shortName && fullName) {
+    return {
+      id,
+      name: shortName,
+      fullName,
+    }
+  }
+
+  if (fullName) {
+    return { id, name: fullName }
+  }
+
+  if (shortName) {
+    const derivedFullName = leagueName ? `${leagueName} ${shortName}` : undefined
+    return {
+      id,
+      name: shortName,
+      fullName: derivedFullName,
+    }
+  }
+
+  const fallbackName = leagueName ? `${leagueName} Division` : 'Division'
+  return { id, name: fallbackName }
+}
+
 const isCompletedGame = (game: RawGame) => {
   const statusCode = game.status?.statusCode?.toUpperCase() ?? ''
   const abstractState = game.status?.abstractGameState?.toLowerCase() ?? ''
@@ -615,7 +735,7 @@ function App() {
   const [nextGameLoading, setNextGameLoading] = useState(true)
   const [nextGameError, setNextGameError] = useState<string | null>(null)
   const [noUpcomingGame, setNoUpcomingGame] = useState(false)
-  const [nlWestStandings, setNlWestStandings] = useState<StandingsTeamRecord[]>([])
+  const [leagueStandings, setLeagueStandings] = useState<LeagueStandingsGroup[]>([])
   const [standingsLoading, setStandingsLoading] = useState(true)
   const [standingsError, setStandingsError] = useState<string | null>(null)
   const [dodgersRecordFromStandings, setDodgersRecordFromStandings] =
@@ -685,25 +805,6 @@ function App() {
   )
 
   const calendarOpen = Boolean(calendarAnchorEl)
-
-  const sortedNlWestStandings = useMemo(
-    () =>
-      [...nlWestStandings].sort((a, b) => {
-        const rankA = Number(a.divisionRank)
-        const rankB = Number(b.divisionRank)
-        if (Number.isFinite(rankA) && Number.isFinite(rankB)) {
-          return rankA - rankB
-        }
-        if (Number.isFinite(rankA)) {
-          return -1
-        }
-        if (Number.isFinite(rankB)) {
-          return 1
-        }
-        return getTeamDisplayName(a).localeCompare(getTeamDisplayName(b))
-      }),
-    [nlWestStandings],
-  )
 
   const dodgersStandingsText =
     dodgersRecordFromNextGame ?? dodgersRecordFromStandings
@@ -910,13 +1011,13 @@ function App() {
     const fetchStandings = async () => {
       setStandingsLoading(true)
       setStandingsError(null)
-      setNlWestStandings([])
+      setLeagueStandings([])
       setDodgersRecordFromStandings(null)
 
       try {
         const season = getPacificNow().getFullYear()
         const response = await fetch(
-          `${STANDINGS_ENDPOINT}?leagueId=104&season=${season}&standingsTypes=regularSeason`,
+          `${STANDINGS_ENDPOINT}?leagueId=103,104&season=${season}&standingsTypes=regularSeason`,
           { signal: controller.signal },
         )
 
@@ -925,19 +1026,7 @@ function App() {
         }
 
         const standingsData: StandingsResponse = await response.json()
-        const records =
-          standingsData.records
-            ?.flatMap((record) => record.teamRecords ?? [])
-            .filter((record) => {
-              const divisionId = record.division?.id
-              if (typeof divisionId === 'number') {
-                return divisionId === NL_WEST_DIVISION_ID
-              }
-
-              const divisionName =
-                record.division?.nameShort ?? record.division?.name ?? ''
-              return divisionName.toLowerCase().includes('west')
-            }) ?? []
+        const records = standingsData.records ?? []
 
         if (!active) {
           return
@@ -948,11 +1037,95 @@ function App() {
           return
         }
 
-        setNlWestStandings(records)
+        const groupedStandings: LeagueStandingsGroup[] = []
+        const allTeamRecords: StandingsTeamRecord[] = []
+
+        records.forEach((record) => {
+          const teamRecords = record.teamRecords ?? []
+          if (teamRecords.length === 0) {
+            return
+          }
+
+          allTeamRecords.push(...teamRecords)
+
+          const leagueInfo = getLeagueDisplayName(record.league)
+
+          let leagueGroup = groupedStandings.find((group) => {
+            if (
+              typeof leagueInfo.id === 'number' &&
+              typeof group.leagueId === 'number'
+            ) {
+              return leagueInfo.id === group.leagueId
+            }
+            if (group.name && leagueInfo.name) {
+              return group.name === leagueInfo.name
+            }
+            return false
+          })
+
+          if (!leagueGroup) {
+            leagueGroup = {
+              leagueId: leagueInfo.id,
+              name: leagueInfo.name,
+              divisions: [],
+            }
+            groupedStandings.push(leagueGroup)
+          }
+
+          const divisionInfo = getDivisionDisplayNames(
+            record.division,
+            leagueInfo.name,
+          )
+
+          leagueGroup.divisions.push({
+            divisionId: divisionInfo.id,
+            name: divisionInfo.name,
+            fullName:
+              divisionInfo.fullName && divisionInfo.fullName !== divisionInfo.name
+                ? divisionInfo.fullName
+                : undefined,
+            teamRecords: sortStandingsTeamRecords(teamRecords),
+          })
+        })
+
+        groupedStandings.forEach((league) => {
+          league.divisions = league.divisions
+            .filter((division) => division.teamRecords.length > 0)
+            .sort((a, b) => {
+              const idA = a.divisionId
+              const idB = b.divisionId
+              if (typeof idA === 'number' && typeof idB === 'number') {
+                return idA - idB
+              }
+              return a.name.localeCompare(b.name)
+            })
+        })
+
+        const filteredStandings = groupedStandings.filter(
+          (league) => league.divisions.length > 0,
+        )
+
+        if (filteredStandings.length === 0) {
+          setStandingsError('Standings data is not available right now.')
+          return
+        }
+
+        setLeagueStandings(
+          filteredStandings.map((league) => ({
+            leagueId: league.leagueId,
+            name: league.name,
+            divisions: league.divisions.map((division) => ({
+              divisionId: division.divisionId,
+              name: division.name,
+              fullName: division.fullName,
+              teamRecords: [...division.teamRecords],
+            })),
+          })),
+        )
 
         const dodgersRecord =
-          records.find((teamRecord) => teamRecord.team?.id === DODGERS_TEAM_ID) ??
-          records.find((teamRecord) =>
+          allTeamRecords.find((teamRecord) => teamRecord.team?.id === DODGERS_TEAM_ID) ??
+          allTeamRecords.find((teamRecord) =>
             getTeamDisplayName(teamRecord).toLowerCase().includes('dodgers'),
           )
 
@@ -1981,11 +2154,11 @@ function App() {
           <Accordion>
             <AccordionSummary
               expandIcon={<ExpandMoreIcon />}
-              aria-controls="nl-west-standings"
-              id="nl-west-standings-header"
+              aria-controls="league-standings"
+              id="league-standings-header"
             >
               <Typography variant="h6" sx={{ flexGrow: 1 }}>
-                NL West Standings
+                MLB Standings
               </Typography>
               {!standingsLoading && !standingsError && (
                 <Typography variant="body2" color="text.secondary">
@@ -2010,61 +2183,112 @@ function App() {
                     </Button>
                   }
                 >
-                  Unable to load the NL West standings. {standingsError}
+                  Unable to load the league standings. {standingsError}
                 </Alert>
-              ) : sortedNlWestStandings.length === 0 ? (
+              ) : leagueStandings.length === 0 ? (
                 <Typography variant="body2" color="text.secondary">
                   Standings data is not available right now.
                 </Typography>
               ) : (
-                <TableContainer>
-                  <Table size="small" aria-label="NL West standings">
-                    <TableHead>
-                      <TableRow>
-                        <TableCell>Team</TableCell>
-                        <TableCell align="right">W</TableCell>
-                        <TableCell align="right">L</TableCell>
-                        <TableCell align="right">Pct</TableCell>
-                        <TableCell align="right">GB</TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {sortedNlWestStandings.map((record) => {
-                        const wins =
-                          typeof record.wins === 'number'
-                            ? record.wins
-                            : undefined
-                        const losses =
-                          typeof record.losses === 'number'
-                            ? record.losses
-                            : undefined
-                        const pct =
-                          formatWinningPercentage(
-                            record.winningPercentage,
-                            wins,
-                            losses,
-                          ) ?? '--'
-                        const gamesBack = record.gamesBack?.trim() || '--'
+                <Stack spacing={3}>
+                  {leagueStandings.map((league) => (
+                    <Box key={league.leagueId ?? league.name}>
+                      <Typography
+                        variant="subtitle1"
+                        sx={{ fontWeight: 600 }}
+                      >
+                        {league.name}
+                      </Typography>
+                      <Stack spacing={2} mt={1}>
+                        {league.divisions.map((division) => {
+                          const divisionKey = `${league.leagueId ?? league.name}-${division.divisionId ?? division.name}`
+                          const divisionLabel = division.fullName ?? division.name
 
-                        return (
-                          <TableRow key={record.team?.id ?? getTeamDisplayName(record)}>
-                            <TableCell component="th" scope="row">
-                              {getTeamDisplayName(record)}
-                            </TableCell>
-                            <TableCell align="right">
-                              {typeof wins === 'number' ? wins : '--'}
-                            </TableCell>
-                            <TableCell align="right">
-                              {typeof losses === 'number' ? losses : '--'}
-                            </TableCell>
-                            <TableCell align="right">{pct}</TableCell>
-                            <TableCell align="right">{gamesBack}</TableCell>
-                          </TableRow>
-                        )
-                      })}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
+                          return (
+                            <Box key={divisionKey}>
+                              <Typography
+                                variant="subtitle2"
+                                sx={{ fontWeight: 600 }}
+                              >
+                                {division.name}
+                              </Typography>
+                              {division.fullName && division.fullName !== division.name && (
+                                <Typography variant="body2" color="text.secondary">
+                                  {division.fullName}
+                                </Typography>
+                              )}
+                              <TableContainer sx={{ mt: 1 }}>
+                                <Table
+                                  size="small"
+                                  aria-label={`${divisionLabel} standings`}
+                                >
+                                  <TableHead>
+                                    <TableRow>
+                                      <TableCell>Team</TableCell>
+                                      <TableCell align="right">W</TableCell>
+                                      <TableCell align="right">L</TableCell>
+                                      <TableCell align="right">Pct</TableCell>
+                                      <TableCell align="right">GB</TableCell>
+                                    </TableRow>
+                                  </TableHead>
+                                  <TableBody>
+                                    {division.teamRecords.map((record) => {
+                                      const wins =
+                                        typeof record.wins === 'number'
+                                          ? record.wins
+                                          : undefined
+                                      const losses =
+                                        typeof record.losses === 'number'
+                                          ? record.losses
+                                          : undefined
+                                      const pct =
+                                        formatWinningPercentage(
+                                          record.winningPercentage,
+                                          wins,
+                                          losses,
+                                        ) ?? '--'
+                                      const gamesBack = record.gamesBack?.trim() || '--'
+                                      const teamName = getTeamDisplayName(record)
+                                      const isDodgers =
+                                        record.team?.id === DODGERS_TEAM_ID ||
+                                        teamName.toLowerCase().includes('dodgers')
+
+                                      return (
+                                        <TableRow
+                                          key={record.team?.id ?? teamName}
+                                          selected={isDodgers}
+                                          sx={
+                                            isDodgers
+                                              ? {
+                                                  '& td, & th': { fontWeight: 600 },
+                                                }
+                                              : undefined
+                                          }
+                                        >
+                                          <TableCell component="th" scope="row">
+                                            {teamName}
+                                          </TableCell>
+                                          <TableCell align="right">
+                                            {typeof wins === 'number' ? wins : '--'}
+                                          </TableCell>
+                                          <TableCell align="right">
+                                            {typeof losses === 'number' ? losses : '--'}
+                                          </TableCell>
+                                          <TableCell align="right">{pct}</TableCell>
+                                          <TableCell align="right">{gamesBack}</TableCell>
+                                        </TableRow>
+                                      )
+                                    })}
+                                  </TableBody>
+                                </Table>
+                              </TableContainer>
+                            </Box>
+                          )
+                        })}
+                      </Stack>
+                    </Box>
+                  ))}
+                </Stack>
               )}
             </AccordionDetails>
           </Accordion>
