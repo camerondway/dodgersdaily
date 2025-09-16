@@ -611,6 +611,10 @@ function App() {
   const [nlWestStandings, setNlWestStandings] = useState<StandingsTeamRecord[]>([])
   const [standingsLoading, setStandingsLoading] = useState(true)
   const [standingsError, setStandingsError] = useState<string | null>(null)
+  const [dodgersRecordFromStandings, setDodgersRecordFromStandings] =
+    useState<string | null>(null)
+  const [dodgersRecordFromNextGame, setDodgersRecordFromNextGame] =
+    useState<string | null>(null)
   const [latestGameIso, setLatestGameIso] = useState<string | null>(null)
   const [latestGameLoading, setLatestGameLoading] = useState(true)
   const [latestGameError, setLatestGameError] = useState<string | null>(null)
@@ -677,6 +681,9 @@ function App() {
       }),
     [nlWestStandings],
   )
+
+  const dodgersStandingsText =
+    dodgersRecordFromNextGame ?? dodgersRecordFromStandings
 
   const applyDateSelection = useCallback(
     (
@@ -881,6 +888,7 @@ function App() {
       setStandingsLoading(true)
       setStandingsError(null)
       setNlWestStandings([])
+      setDodgersRecordFromStandings(null)
 
       try {
         const season = getPacificNow().getFullYear()
@@ -918,6 +926,17 @@ function App() {
         }
 
         setNlWestStandings(records)
+
+        const dodgersRecord =
+          records.find((teamRecord) => teamRecord.team?.id === DODGERS_TEAM_ID) ??
+          records.find((teamRecord) =>
+            getTeamDisplayName(teamRecord).toLowerCase().includes('dodgers'),
+          )
+
+        const formattedDodgersRecord = formatOpponentStanding(dodgersRecord)
+        if (formattedDodgersRecord) {
+          setDodgersRecordFromStandings(formattedDodgersRecord)
+        }
       } catch (err) {
         if (!active) {
           return
@@ -953,6 +972,7 @@ function App() {
       setNextGameError(null)
       setNoUpcomingGame(false)
       setNextGameDetails(null)
+      setDodgersRecordFromNextGame(null)
 
       try {
         const pacificNow = getPacificNow()
@@ -1015,6 +1035,14 @@ function App() {
               ?.flatMap((record) => record.teamRecords ?? [])
               .find((record) => record.team?.id === opponentTeam.id)
             opponentStanding = formatOpponentStanding(standingsRecord)
+
+            const dodgersRecord = standingsData.records
+              ?.flatMap((record) => record.teamRecords ?? [])
+              .find((record) => record.team?.id === DODGERS_TEAM_ID)
+            const formattedDodgersRecord = formatOpponentStanding(dodgersRecord)
+            if (formattedDodgersRecord && active) {
+              setDodgersRecordFromNextGame(formattedDodgersRecord)
+            }
           }
         } catch (standingsError) {
           if ((standingsError as Error).name !== 'AbortError') {
@@ -1691,6 +1719,11 @@ function App() {
                 {nextGameDetails.opponentStanding
                   ? ` (${nextGameDetails.opponent}: ${nextGameDetails.opponentStanding})`
                   : ''}
+              </Typography>
+            )}
+            {dodgersStandingsText && (
+              <Typography variant="h5" color="text.secondary">
+                {`Dodgers Record: ${dodgersStandingsText}`}
               </Typography>
             )}
           </Box>
