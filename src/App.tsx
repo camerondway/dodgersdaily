@@ -830,7 +830,7 @@ function App() {
       active = false
       controller.abort()
     }
-  }, [refreshToken])
+  }, [refreshToken, systemTimeZone])
 
   useEffect(() => {
     let active = true
@@ -1020,7 +1020,7 @@ function App() {
         const scheduleData: ScheduleResponse = await response.json()
         const games =
           scheduleData.dates?.flatMap((date) => date.games ?? []) ?? []
-        const nowTime = pacificNow.getTime()
+        const nowTime = Date.now()
         const upcomingGame = [...games]
           .filter((game) => !isCompletedGame(game))
           .filter((game) => new Date(game.gameDate).getTime() >= nowTime)
@@ -1132,8 +1132,7 @@ function App() {
     }
 
     const updateVisibility = () => {
-      const now = getPacificNow()
-      const diffMinutes = (gameStart.getTime() - now.getTime()) / 60000
+      const diffMinutes = (gameStart.getTime() - Date.now()) / 60000
       const withinWindow =
         Number.isFinite(diffMinutes) && diffMinutes <= 20 && diffMinutes >= -10
 
