@@ -20,10 +20,14 @@ import {
   Chip,
   CircularProgress,
   Container,
+  FormControl,
   FormControlLabel,
   IconButton,
+  InputLabel,
   Link,
+  MenuItem,
   Popover,
+  Select,
   Stack,
   Switch,
   Table,
@@ -35,6 +39,7 @@ import {
   Toolbar,
   Typography,
 } from '@mui/material'
+import type { SelectChangeEvent } from '@mui/material/Select'
 import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import SportsBaseballIcon from '@mui/icons-material/SportsBaseball'
@@ -48,6 +53,7 @@ const NL_WEST_DIVISION_ID = 203
 const SCHEDULE_ENDPOINT = 'https://statsapi.mlb.com/api/v1/schedule'
 const GAME_CONTENT_ENDPOINT = 'https://statsapi.mlb.com/api/v1/game'
 const STANDINGS_ENDPOINT = 'https://statsapi.mlb.com/api/v1/standings'
+const EARLIEST_CALENDAR_YEAR = 2010
 const FALLBACK_STREAMABLE =
   'https://streamable.com/m/condensed-game-lad-sf-9-14-25?partnerId=web_video-playback-page_video-share'
 
@@ -624,6 +630,30 @@ function App() {
 
   const calendarDays = useMemo(
     () => buildCalendarDays(calendarMonth),
+    [calendarMonth],
+  )
+
+  const availableYears = useMemo(() => {
+    const nowYear = getPacificNow().getFullYear()
+    const currentYearString = formatPacificIso(calendarMonth).slice(0, 4)
+    const parsedCalendarYear = Number(currentYearString)
+    const earliestYear = Number.isFinite(parsedCalendarYear)
+      ? Math.min(EARLIEST_CALENDAR_YEAR, parsedCalendarYear)
+      : EARLIEST_CALENDAR_YEAR
+    const startYear = Number.isFinite(parsedCalendarYear)
+      ? Math.max(nowYear, parsedCalendarYear)
+      : nowYear
+
+    const years: number[] = []
+    for (let year = startYear; year >= earliestYear; year -= 1) {
+      years.push(year)
+    }
+
+    return years
+  }, [calendarMonth])
+
+  const selectedCalendarYear = useMemo(
+    () => formatPacificIso(calendarMonth).slice(0, 4),
     [calendarMonth],
   )
 
@@ -1302,6 +1332,22 @@ function App() {
     setCalendarMonth((current) => addMonths(current, delta))
   }
 
+  const handleYearChange = (event: SelectChangeEvent<string>) => {
+    const yearValue = event.target.value
+    if (!yearValue) {
+      return
+    }
+
+    setCalendarMonth((current) => {
+      const [, monthString] = formatPacificIso(current).split('-')
+      if (!monthString) {
+        return createDateFromIso(`${yearValue}-01-01`)
+      }
+
+      return createDateFromIso(`${yearValue}-${monthString}-01`)
+    })
+  }
+
   const handleDateSelect = (isoDate: string) => {
     userSelectionRef.current = true
     appliedLatestIsoRef.current = null
@@ -1393,11 +1439,29 @@ function App() {
             >
               <ChevronLeftIcon />
             </IconButton>
-            <Stack direction="row" spacing={1} alignItems="center">
-              <Typography variant="h6">
-                {pacificMonthFormatter.format(calendarMonth)}
-              </Typography>
-              {monthLoading && <CircularProgress size={18} thickness={5} />}
+            <Stack direction="row" spacing={1.5} alignItems="center">
+              <Stack direction="row" spacing={1} alignItems="center">
+                <Typography variant="h6">
+                  {pacificMonthFormatter.format(calendarMonth)}
+                </Typography>
+                {monthLoading && <CircularProgress size={18} thickness={5} />}
+              </Stack>
+              <FormControl size="small" sx={{ minWidth: 96 }}>
+                <InputLabel id="calendar-year-label">Year</InputLabel>
+                <Select
+                  labelId="calendar-year-label"
+                  id="calendar-year"
+                  label="Year"
+                  value={selectedCalendarYear}
+                  onChange={handleYearChange}
+                >
+                  {availableYears.map((year) => (
+                    <MenuItem key={year} value={String(year)}>
+                      {year}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
             </Stack>
             <IconButton
               aria-label="Next month"
