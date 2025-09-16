@@ -463,10 +463,18 @@ function App() {
   const [nlWestStandings, setNlWestStandings] = useState<StandingsTeamRecord[]>([])
   const [standingsLoading, setStandingsLoading] = useState(true)
   const [standingsError, setStandingsError] = useState<string | null>(null)
+  const [latestGameIso, setLatestGameIso] = useState<string | null>(null)
+  const [latestGameLoading, setLatestGameLoading] = useState(true)
+  const [latestGameError, setLatestGameError] = useState<string | null>(null)
 
   const selectedDisplayDate = useMemo(
     () => formatDisplayDate(selectedDateIso),
     [selectedDateIso],
+  )
+
+  const latestGameDisplayDate = useMemo(
+    () => (latestGameIso ? formatDisplayDate(latestGameIso) : null),
+    [latestGameIso],
   )
 
   const calendarDays = useMemo(
@@ -494,6 +502,97 @@ function App() {
       }),
     [nlWestStandings],
   )
+
+  useEffect(() => {
+    let active = true
+    const controller = new AbortController()
+
+    const fetchLatestGame = async () => {
+      setLatestGameLoading(true)
+      setLatestGameError(null)
+
+      try {
+        const now = getPacificNow()
+        const searchStart = startOfMonth(now)
+        let foundIso: string | null = null
+
+        for (let offset = 0; offset < 12 && !foundIso; offset += 1) {
+          const monthDate = addMonths(searchStart, -offset)
+          const monthStart = monthDate
+          const monthEnd = new Date(
+            monthDate.getFullYear(),
+            monthDate.getMonth() + 1,
+            0,
+          )
+
+          const response = await fetch(
+            `${SCHEDULE_ENDPOINT}?sportId=1&teamId=${DODGERS_TEAM_ID}&startDate=${formatPacificIso(monthStart)}&endDate=${formatPacificIso(monthEnd)}`,
+            { signal: controller.signal },
+          )
+
+          if (!response.ok) {
+            throw new Error(`Schedule request failed (${response.status})`)
+          }
+
+          const scheduleData: ScheduleResponse = await response.json()
+          const games =
+            scheduleData.dates?.flatMap((date) => date.games ?? []) ?? []
+
+          const latestCompleted = games
+            .filter(isCompletedGame)
+            .sort(
+              (a, b) =>
+                new Date(b.gameDate).getTime() - new Date(a.gameDate).getTime(),
+            )
+            .find(
+              (game) => new Date(game.gameDate).getTime() <= now.getTime(),
+            )
+
+          if (latestCompleted) {
+            const latestDate = new Date(latestCompleted.gameDate)
+            if (!Number.isNaN(latestDate.getTime())) {
+              foundIso = formatPacificIso(latestDate)
+            }
+          }
+        }
+
+        if (!active) {
+          return
+        }
+
+        if (!foundIso) {
+          setLatestGameIso(null)
+          setLatestGameError('No completed games found yet this season.')
+          return
+        }
+
+        setLatestGameIso(foundIso)
+      } catch (err) {
+        if (!active) {
+          return
+        }
+
+        const error = err as Error
+        if (error.name === 'AbortError') {
+          return
+        }
+
+        setLatestGameIso(null)
+        setLatestGameError(error.message)
+      } finally {
+        if (active) {
+          setLatestGameLoading(false)
+        }
+      }
+    }
+
+    fetchLatestGame()
+
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [refreshToken])
 
   useEffect(() => {
     let active = true
@@ -944,6 +1043,14 @@ function App() {
     setCalendarAnchorEl(null)
   }
 
+  const handleLatestGameClick = () => {
+    if (!latestGameIso) {
+      return
+    }
+
+    handleDateSelect(latestGameIso)
+  }
+
   const outcomeColor =
     gameDetails?.outcome === 'Win'
       ? 'success'
@@ -1032,9 +1139,20 @@ function App() {
           <Typography variant="body2" color="text.secondary">
             Selected Game: {selectedDisplayDate}
           </Typography>
+          <Typography variant="body2" color="text.secondary">
+            Latest Completed Game:{' '}
+            {latestGameLoading
+              ? 'Loading...'
+              : latestGameDisplayDate ?? 'Unavailable'}
+          </Typography>
           {monthError && (
             <Alert severity="warning">
               Unable to mark game days right now. {monthError}
+            </Alert>
+          )}
+          {latestGameError && (
+            <Alert severity="info">
+              Unable to load the latest game right now. {latestGameError}
             </Alert>
           )}
           <Box
@@ -1122,9 +1240,28 @@ function App() {
               )
             })}
           </Box>
-          <Button onClick={handleCalendarClose} variant="outlined" size="small">
-            Close
-          </Button>
+          <Stack
+            direction="row"
+            spacing={1}
+            justifyContent="flex-end"
+            flexWrap="wrap"
+          >
+            <Button
+              onClick={handleLatestGameClick}
+              variant="contained"
+              size="small"
+              disabled={
+                latestGameLoading ||
+                !latestGameIso ||
+                selectedDateIso === latestGameIso
+              }
+            >
+              Latest Game
+            </Button>
+            <Button onClick={handleCalendarClose} variant="outlined" size="small">
+              Close
+            </Button>
+          </Stack>
         </Stack>
       </Popover>
 
