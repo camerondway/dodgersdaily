@@ -1374,44 +1374,84 @@ function App() {
   return (
     <Box sx={{ minHeight: '100vh', backgroundColor: 'background.default' }}>
       <AppBar position="static" color="primary" enableColorOnDark>
-        <Toolbar>
-          <SportsBaseballIcon sx={{ mr: 1 }} />
-          <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
-            Dodgers Daily Replay
-          </Typography>
-          <Button
-            color="inherit"
-            startIcon={<CalendarMonthIcon />}
-            onClick={handleCalendarButtonClick}
-            aria-haspopup="true"
-            aria-expanded={calendarOpen ? 'true' : undefined}
-            sx={{ mr: 2, whiteSpace: 'nowrap' }}
+        <Toolbar
+          sx={{
+            flexDirection: { xs: 'column', sm: 'row' },
+            alignItems: { xs: 'stretch', sm: 'center' },
+            gap: { xs: 1.5, sm: 0 },
+            py: { xs: 1.5, sm: 0.5 },
+          }}
+        >
+          <Box
+            sx={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 1,
+              width: '100%',
+            }}
           >
-            Select Game Date
-          </Button>
-          <FormControlLabel
-            control={
-              <Switch
-                color="default"
-                checked={showSpoilers}
-                onChange={(event) => setShowSpoilers(event.target.checked)}
-              />
-            }
-            label="Spoilers"
-            sx={{ color: 'inherit', mr: 2 }}
-          />
-          <Button
-            color="inherit"
-            onClick={handleLatestGameClick}
-            startIcon={<PlayCircleOutlineIcon />}
-            disabled={
-              latestGameLoading ||
-              !latestGameIso ||
-              selectedDateIso === latestGameIso
-            }
+            <SportsBaseballIcon sx={{ flexShrink: 0 }} />
+            <Typography variant="h6" component="div" sx={{ flexGrow: 1 }}>
+              Dodgers Daily Replay
+            </Typography>
+          </Box>
+          <Stack
+            direction="row"
+            spacing={1}
+            alignItems="center"
+            justifyContent={{ xs: 'flex-start', sm: 'flex-end' }}
+            sx={{
+              width: { xs: '100%', sm: 'auto' },
+              ml: { sm: 'auto' },
+              flexWrap: { xs: 'wrap', md: 'nowrap' },
+              rowGap: { xs: 1, md: 0 },
+            }}
           >
-            Latest Condensed Game
-          </Button>
+            <Button
+              color="inherit"
+              startIcon={<CalendarMonthIcon />}
+              onClick={handleCalendarButtonClick}
+              aria-haspopup="true"
+              aria-expanded={calendarOpen ? 'true' : undefined}
+              sx={{
+                whiteSpace: { xs: 'normal', sm: 'nowrap' },
+                textAlign: 'left',
+              }}
+            >
+              Select Game Date
+            </Button>
+            <FormControlLabel
+              control={
+                <Switch
+                  color="default"
+                  checked={showSpoilers}
+                  onChange={(event) => setShowSpoilers(event.target.checked)}
+                />
+              }
+              label="Spoilers"
+              sx={{
+                color: 'inherit',
+                mx: { xs: 0, sm: 2 },
+                flexShrink: 0,
+              }}
+            />
+            <Button
+              color="inherit"
+              onClick={handleLatestGameClick}
+              startIcon={<PlayCircleOutlineIcon />}
+              disabled={
+                latestGameLoading ||
+                !latestGameIso ||
+                selectedDateIso === latestGameIso
+              }
+              sx={{
+                whiteSpace: { xs: 'normal', sm: 'nowrap' },
+                textAlign: 'left',
+              }}
+            >
+              Latest Condensed Game
+            </Button>
+          </Stack>
         </Toolbar>
       </AppBar>
 
