@@ -22,6 +22,7 @@ import {
   Container,
   FormControlLabel,
   IconButton,
+  Link,
   Popover,
   Stack,
   Switch,
@@ -132,6 +133,7 @@ type GameDetails = {
   embedUrl?: string
   headline?: string
   description?: string
+  previousGameIso?: string | null
 }
 
 type NextGameDetails = {
@@ -1039,8 +1041,12 @@ function App() {
       setGameDetails(null)
 
       try {
+        const selectedDate = createDateFromIso(selectedDateIso)
+        const scheduleStart = addPacificDays(selectedDate, -365)
+        const scheduleStartIso = formatPacificIso(scheduleStart)
+
         const scheduleResponse = await fetch(
-          `${SCHEDULE_ENDPOINT}?sportId=1&teamId=${DODGERS_TEAM_ID}&startDate=${selectedDateIso}&endDate=${selectedDateIso}`,
+          `${SCHEDULE_ENDPOINT}?sportId=1&teamId=${DODGERS_TEAM_ID}&startDate=${scheduleStartIso}&endDate=${selectedDateIso}`,
           { signal: controller.signal },
         )
 
@@ -1052,27 +1058,62 @@ function App() {
         const games =
           scheduleData.dates?.flatMap((date) => date.games ?? []) ?? []
 
-        const completedGame = [...games]
+        const completedGamesSorted = [...games]
           .filter(isCompletedGame)
-          .sort(
-            (a, b) => new Date(b.gameDate).getTime() - new Date(a.gameDate).getTime(),
-          )[0]
+          .sort((a, b) => {
+            const timeA = new Date(a.gameDate).getTime()
+            const timeB = new Date(b.gameDate).getTime()
+            if (Number.isNaN(timeA) || Number.isNaN(timeB)) {
+              return 0
+            }
+            return timeB - timeA
+          })
 
-        if (!completedGame) {
+        const selectedGameIndex = completedGamesSorted.findIndex((game) => {
+          const parsedDate = new Date(game.gameDate)
+          if (Number.isNaN(parsedDate.getTime())) {
+            return false
+          }
+          return formatPacificIso(parsedDate) === selectedDateIso
+        })
+
+        const selectedGame =
+          selectedGameIndex >= 0
+            ? completedGamesSorted[selectedGameIndex]
+            : undefined
+
+        if (!selectedGame) {
           if (active) {
             setNoGame(true)
           }
           return
         }
 
+        let previousGameIso: string | null = null
+
+        if (selectedGameIndex >= 0) {
+          for (const candidate of completedGamesSorted.slice(selectedGameIndex + 1)) {
+            const parsedDate = new Date(candidate.gameDate)
+            if (Number.isNaN(parsedDate.getTime())) {
+              continue
+            }
+            const candidateIso = formatPacificIso(parsedDate)
+            if (candidateIso === selectedDateIso) {
+              continue
+            }
+            previousGameIso = candidateIso
+            break
+          }
+        }
+
         const dodgersAreHome =
-          completedGame.teams.home.team.id === DODGERS_TEAM_ID
+          selectedGame.teams.home.team.id === DODGERS_TEAM_ID
         const opponentTeam =
-          completedGame.teams[dodgersAreHome ? 'away' : 'home'].team
-        const dodgersScore = completedGame.teams[
+          selectedGame.teams[dodgersAreHome ? 'away' : 'home'].team
+        const dodgersScore = selectedGame.teams[
           dodgersAreHome ? 'home' : 'away'
         ].score
-        const opponentScore = completedGame.teams[
+        const opponentScore = selectedGame.teams[
           dodgersAreHome ? 'away' : 'home'
         ].score
 
@@ -1083,7 +1124,7 @@ function App() {
 
         try {
           const contentResponse = await fetch(
-            `${GAME_CONTENT_ENDPOINT}/${completedGame.gamePk}/content`,
+            `${GAME_CONTENT_ENDPOINT}/${selectedGame.gamePk}/content`,
             { signal: controller.signal },
           )
 
@@ -1138,7 +1179,7 @@ function App() {
           opponent:
             opponentTeam?.teamName ?? opponentTeam?.name ?? 'Opposing Team',
           homeAway: dodgersAreHome ? 'home' : 'away',
-          venue: completedGame.venue?.name,
+          venue: selectedGame.venue?.name,
           dodgersScore,
           opponentScore,
           outcome:
@@ -1150,12 +1191,13 @@ function App() {
                   : 'Loss'
               : undefined,
           statusText:
-            completedGame.status?.detailedState ??
-            completedGame.status?.abstractGameState,
+            selectedGame.status?.detailedState ??
+            selectedGame.status?.abstractGameState,
           videoUrl,
           embedUrl,
           headline,
           description,
+          previousGameIso,
         })
       } catch (err) {
         if (!active) {
@@ -1648,6 +1690,23 @@ function App() {
 
                   {gameDetails.headline && (
                     <Typography variant="h5">{gameDetails.headline}</Typography>
+                  )}
+
+                  {gameDetails.previousGameIso && (
+                    <Link
+                      href={`?date=${gameDetails.previousGameIso}`}
+                      underline="hover"
+                      onClick={(event) => {
+                        event.preventDefault()
+                        const previousIso = gameDetails.previousGameIso
+                        if (previousIso) {
+                          handleDateSelect(previousIso)
+                        }
+                      }}
+                      sx={{ alignSelf: 'flex-start' }}
+                    >
+                      View Previous Game
+                    </Link>
                   )}
 
                   {gameDetails.description && (
