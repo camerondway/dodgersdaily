@@ -1465,6 +1465,10 @@ function App() {
               sx={{
                 whiteSpace: { xs: 'normal', sm: 'nowrap' },
                 textAlign: 'left',
+                '&.Mui-disabled': {
+                  color: 'text.disabled',
+                  '& .MuiButton-startIcon': { color: 'text.disabled' },
+                },
               }}
             >
               Latest Condensed Game
