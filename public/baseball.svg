@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 64 64" role="img" aria-label="Baseball icon">
+  <circle cx="32" cy="32" r="30" fill="#ffffff" stroke="#e5e7eb" stroke-width="4" />
+  <path d="M18 12c2 8.5 2 31.5 0 40" fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" />
+  <path d="M46 12c-2 8.5-2 31.5 0 40" fill="none" stroke="#ef4444" stroke-width="3" stroke-linecap="round" />
+  <path d="M16 22c3 2 5 4 7 6m-7 8c3 2 5 4 7 6m-7 8c3 2 5 4 7 6" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" />
+  <path d="M48 22c-3 2-5 4-7 6m7 8c-3 2-5 4-7 6m7 8c-3 2-5 4-7 6" fill="none" stroke="#ef4444" stroke-width="2" stroke-linecap="round" />
+</svg>
