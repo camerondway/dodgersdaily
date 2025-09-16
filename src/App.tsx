@@ -34,7 +34,7 @@ import {
   Toolbar,
   Typography,
 } from '@mui/material'
-import RefreshIcon from '@mui/icons-material/Refresh'
+import PlayCircleOutlineIcon from '@mui/icons-material/PlayCircleOutline'
 import OpenInNewIcon from '@mui/icons-material/OpenInNew'
 import SportsBaseballIcon from '@mui/icons-material/SportsBaseball'
 import ExpandMoreIcon from '@mui/icons-material/ExpandMore'
@@ -1244,7 +1244,7 @@ function App() {
     }
   }, [applyDateSelection, latestGameIso])
 
-  const handleRefresh = () => {
+  const handleRetry = () => {
     setRefreshToken((token) => token + 1)
   }
 
@@ -1314,11 +1314,15 @@ function App() {
           />
           <Button
             color="inherit"
-            onClick={handleRefresh}
-            startIcon={<RefreshIcon />}
-            disabled={loading}
+            onClick={handleLatestGameClick}
+            startIcon={<PlayCircleOutlineIcon />}
+            disabled={
+              latestGameLoading ||
+              !latestGameIso ||
+              selectedDateIso === latestGameIso
+            }
           >
-            Refresh
+            Latest Condensed Game
           </Button>
         </Toolbar>
       </AppBar>
@@ -1536,7 +1540,7 @@ function App() {
             <Alert
               severity="error"
               action={
-                <Button color="inherit" size="small" onClick={handleRefresh}>
+                <Button color="inherit" size="small" onClick={handleRetry}>
                   Retry
                 </Button>
               }
@@ -1694,7 +1698,7 @@ function App() {
                 <Alert
                   severity="error"
                   action={
-                    <Button color="inherit" size="small" onClick={handleRefresh}>
+                    <Button color="inherit" size="small" onClick={handleRetry}>
                       Retry
                     </Button>
                   }
