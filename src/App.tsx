@@ -1,4 +1,11 @@
-import { useEffect, useMemo, useState, type MouseEvent as ReactMouseEvent } from 'react'
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type MouseEvent as ReactMouseEvent,
+} from 'react'
 import {
   Accordion,
   AccordionDetails,
@@ -179,7 +186,105 @@ const pacificMonthFormatter = new Intl.DateTimeFormat('en-US', {
   timeZone: 'America/Los_Angeles',
 })
 
+const pacificWeekdayFormatter = new Intl.DateTimeFormat('en-US', {
+  weekday: 'short',
+  timeZone: 'America/Los_Angeles',
+})
+
+const pacificOffsetFormatter = new Intl.DateTimeFormat('en-US', {
+  hour: '2-digit',
+  minute: '2-digit',
+  second: '2-digit',
+  hourCycle: 'h23',
+  timeZone: 'America/Los_Angeles',
+  timeZoneName: 'shortOffset',
+})
+
 const WEEKDAY_LABELS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
+
+const ISO_DATE_PATTERN = /^\d{4}-\d{2}-\d{2}$/
+
+const getDateFromLocation = () => {
+  if (typeof window === 'undefined') {
+    return null
+  }
+
+  try {
+    const url = new URL(window.location.href)
+    const dateParam = (url.searchParams.get('date') ?? '').trim()
+
+    if (ISO_DATE_PATTERN.test(dateParam)) {
+      return dateParam
+    }
+  } catch {
+    // Ignore URL parsing errors and fall back to default selection.
+  }
+
+  return null
+}
+
+const updateDateInUrl = (isoDate: string, replace = false) => {
+  if (typeof window === 'undefined' || !ISO_DATE_PATTERN.test(isoDate)) {
+    return
+  }
+
+  const { history } = window
+  if (!history || typeof history.pushState !== 'function') {
+    return
+  }
+
+  const url = new URL(window.location.href)
+  const currentValue = url.searchParams.get('date')
+  url.searchParams.set('date', isoDate)
+  const newUrl = `${url.pathname}${url.search}${url.hash}`
+
+  if (replace) {
+    const currentUrl = `${window.location.pathname}${window.location.search}${window.location.hash}`
+    if (currentUrl !== newUrl) {
+      history.replaceState(history.state, '', newUrl)
+    }
+    return
+  }
+
+  if (currentValue !== isoDate) {
+    history.pushState(history.state, '', newUrl)
+  }
+}
+
+const parseGmtOffsetMinutes = (offsetText: string) => {
+  const match = offsetText.match(/GMT([+-]\d{1,2})(?::(\d{2}))?/)
+  if (!match) {
+    return -480
+  }
+
+  const sign = match[1].startsWith('-') ? -1 : 1
+  const hours = Math.abs(parseInt(match[1], 10))
+  const minutes = match[2] ? parseInt(match[2], 10) : 0
+  return sign * (hours * 60 + minutes)
+}
+
+const getPacificOffsetMinutes = (() => {
+  const cache = new Map<string, number>()
+
+  return (isoDate: string) => {
+    const cached = cache.get(isoDate)
+    if (typeof cached === 'number') {
+      return cached
+    }
+
+    const base = new Date(`${isoDate}T00:00:00Z`)
+    if (Number.isNaN(base.getTime())) {
+      return -480
+    }
+
+    const offsetPart = pacificOffsetFormatter
+      .formatToParts(base)
+      .find((part) => part.type === 'timeZoneName')?.value
+    const offset = parseGmtOffsetMinutes(offsetPart ?? '')
+    cache.set(isoDate, offset)
+    return offset
+  }
+})()
 
 const createDateFromIso = (isoDate: string) => {
   const [year, month, day] = isoDate.split('-').map(Number)
@@ -188,10 +293,17 @@ const createDateFromIso = (isoDate: string) => {
     Number.isFinite(month) &&
     Number.isFinite(day)
   ) {
-    return new Date(year, month - 1, day)
+    const offsetMinutes = getPacificOffsetMinutes(isoDate)
+    const utcMillis = Date.UTC(year, month - 1, day)
+    return new Date(utcMillis - offsetMinutes * 60 * 1000)
   }
 
-  return new Date(isoDate)
+  const fallback = new Date(isoDate)
+  if (!Number.isNaN(fallback.getTime())) {
+    return fallback
+  }
+
+  return new Date()
 }
 
 const formatDisplayDate = (isoDate: string) =>
@@ -200,16 +312,42 @@ const formatDisplayDate = (isoDate: string) =>
 const formatPacificIso = (date: Date) => pacificIsoFormatter.format(date)
 
 const startOfMonth = (date: Date) =>
-  new Date(date.getFullYear(), date.getMonth(), 1)
+  createDateFromIso(`${formatPacificIso(date).slice(0, 7)}-01`)
 
-const addMonths = (date: Date, delta: number) =>
-  startOfMonth(new Date(date.getFullYear(), date.getMonth() + delta, 1))
+const addMonths = (date: Date, delta: number) => {
+  const iso = formatPacificIso(date)
+  const [yearString, monthString] = iso.split('-')
+  const year = Number(yearString)
+  const monthIndex = Number(monthString) - 1
+  if (!Number.isFinite(year) || !Number.isFinite(monthIndex)) {
+    return date
+  }
+
+  const next = new Date(Date.UTC(year, monthIndex + delta, 1))
+  const nextIso = `${next.getUTCFullYear()}-${String(next.getUTCMonth() + 1).padStart(2, '0')}-01`
+  return createDateFromIso(nextIso)
+}
+
+const addPacificDays = (date: Date, amount: number) => {
+  const next = new Date(date)
+  next.setUTCDate(next.getUTCDate() + amount)
+  return next
+}
+
+const getPacificDayOfWeek = (date: Date) => {
+  const label = pacificWeekdayFormatter.format(date)
+  const index = WEEKDAY_LABELS.indexOf(label)
+  return index >= 0 ? index : 0
+}
+
+const endOfMonth = (date: Date) =>
+  addPacificDays(addMonths(startOfMonth(date), 1), -1)
 
 const buildCalendarDays = (monthDate: Date) => {
   const firstOfMonth = startOfMonth(monthDate)
-  const firstDayOffset = firstOfMonth.getDay()
-  const firstVisibleDate = new Date(firstOfMonth)
-  firstVisibleDate.setDate(firstVisibleDate.getDate() - firstDayOffset)
+  const firstDayOffset = getPacificDayOfWeek(firstOfMonth)
+  const firstVisibleDate = addPacificDays(firstOfMonth, -firstDayOffset)
+  const currentMonthPrefix = formatPacificIso(firstOfMonth).slice(0, 7)
 
   const days = [] as Array<{
     date: Date
@@ -218,12 +356,12 @@ const buildCalendarDays = (monthDate: Date) => {
   }>
 
   for (let index = 0; index < 42; index += 1) {
-    const current = new Date(firstVisibleDate)
-    current.setDate(firstVisibleDate.getDate() + index)
+    const current = addPacificDays(firstVisibleDate, index)
+    const iso = formatPacificIso(current)
     days.push({
       date: current,
-      iso: formatPacificIso(current),
-      inCurrentMonth: current.getMonth() === monthDate.getMonth(),
+      iso,
+      inCurrentMonth: iso.startsWith(currentMonthPrefix),
     })
   }
 
@@ -440,10 +578,12 @@ const pickEmbedUrl = (playbacks?: Playback[]) => {
 }
 
 function App() {
-  const initialTargetDate = useMemo(getPreviousDodgersDate, [])
-  const [selectedDateIso, setSelectedDateIso] = useState(initialTargetDate.isoDate)
+  const urlDate = useMemo(getDateFromLocation, [])
+  const fallbackDate = useMemo(getPreviousDodgersDate, [])
+  const initialSelectedIso = urlDate ?? fallbackDate.isoDate
+  const [selectedDateIso, setSelectedDateIso] = useState(initialSelectedIso)
   const [calendarMonth, setCalendarMonth] = useState(() =>
-    startOfMonth(createDateFromIso(initialTargetDate.isoDate)),
+    startOfMonth(createDateFromIso(initialSelectedIso)),
   )
   const [monthGames, setMonthGames] = useState<Record<string, RawGame[]>>({})
   const [monthLoading, setMonthLoading] = useState(true)
@@ -466,6 +606,9 @@ function App() {
   const [latestGameIso, setLatestGameIso] = useState<string | null>(null)
   const [latestGameLoading, setLatestGameLoading] = useState(true)
   const [latestGameError, setLatestGameError] = useState<string | null>(null)
+
+  const userSelectionRef = useRef<boolean>(Boolean(urlDate))
+  const appliedLatestIsoRef = useRef<string | null>(null)
 
   const selectedDisplayDate = useMemo(
     () => formatDisplayDate(selectedDateIso),
@@ -503,6 +646,43 @@ function App() {
     [nlWestStandings],
   )
 
+  const applyDateSelection = useCallback(
+    (
+      isoDate: string,
+      {
+        historyMode = 'push',
+        closeCalendar = true,
+      }: {
+        historyMode?: 'push' | 'replace' | 'skip'
+        closeCalendar?: boolean
+      } = {},
+    ) => {
+      setSelectedDateIso((current) => (current === isoDate ? current : isoDate))
+      setCalendarMonth((current) => {
+        const nextMonth = startOfMonth(createDateFromIso(isoDate))
+        const nextPrefix = formatPacificIso(nextMonth).slice(0, 7)
+        const currentPrefix = formatPacificIso(current).slice(0, 7)
+
+        if (nextPrefix === currentPrefix) {
+          return current
+        }
+
+        return nextMonth
+      })
+
+      if (closeCalendar) {
+        setCalendarAnchorEl(null)
+      }
+
+      if (historyMode === 'replace') {
+        updateDateInUrl(isoDate, true)
+      } else if (historyMode === 'push') {
+        updateDateInUrl(isoDate, false)
+      }
+    },
+    [],
+  )
+
   useEffect(() => {
     let active = true
     const controller = new AbortController()
@@ -519,11 +699,7 @@ function App() {
         for (let offset = 0; offset < 12 && !foundIso; offset += 1) {
           const monthDate = addMonths(searchStart, -offset)
           const monthStart = monthDate
-          const monthEnd = new Date(
-            monthDate.getFullYear(),
-            monthDate.getMonth() + 1,
-            0,
-          )
+          const monthEnd = endOfMonth(monthDate)
 
           const response = await fetch(
             `${SCHEDULE_ENDPOINT}?sportId=1&teamId=${DODGERS_TEAM_ID}&startDate=${formatPacificIso(monthStart)}&endDate=${formatPacificIso(monthEnd)}`,
@@ -605,11 +781,7 @@ function App() {
 
       try {
         const monthStart = startOfMonth(calendarMonth)
-        const monthEnd = new Date(
-          calendarMonth.getFullYear(),
-          calendarMonth.getMonth() + 1,
-          0,
-        )
+        const monthEnd = endOfMonth(calendarMonth)
 
         const response = await fetch(
           `${SCHEDULE_ENDPOINT}?sportId=1&teamId=${DODGERS_TEAM_ID}&startDate=${formatPacificIso(monthStart)}&endDate=${formatPacificIso(monthEnd)}`,
@@ -1011,6 +1183,67 @@ function App() {
     }
   }, [selectedDateIso, selectedDisplayDate, refreshToken])
 
+  useEffect(() => {
+    if (!latestGameIso) {
+      return
+    }
+
+    if (userSelectionRef.current) {
+      return
+    }
+
+    if (appliedLatestIsoRef.current === latestGameIso) {
+      return
+    }
+
+    appliedLatestIsoRef.current = latestGameIso
+    userSelectionRef.current = false
+    applyDateSelection(latestGameIso, {
+      historyMode: 'replace',
+      closeCalendar: false,
+    })
+  }, [latestGameIso, applyDateSelection])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    const handlePopState = () => {
+      const isoFromUrl = getDateFromLocation()
+      if (isoFromUrl) {
+        userSelectionRef.current = true
+        applyDateSelection(isoFromUrl, {
+          historyMode: 'skip',
+          closeCalendar: false,
+        })
+        return
+      }
+
+      userSelectionRef.current = false
+
+      if (latestGameIso) {
+        appliedLatestIsoRef.current = latestGameIso
+        applyDateSelection(latestGameIso, {
+          historyMode: 'skip',
+          closeCalendar: false,
+        })
+        return
+      }
+
+      appliedLatestIsoRef.current = null
+      applyDateSelection(getPreviousDodgersDate().isoDate, {
+        historyMode: 'skip',
+        closeCalendar: false,
+      })
+    }
+
+    window.addEventListener('popstate', handlePopState)
+    return () => {
+      window.removeEventListener('popstate', handlePopState)
+    }
+  }, [applyDateSelection, latestGameIso])
+
   const handleRefresh = () => {
     setRefreshToken((token) => token + 1)
   }
@@ -1028,19 +1261,9 @@ function App() {
   }
 
   const handleDateSelect = (isoDate: string) => {
-    setSelectedDateIso(isoDate)
-    setCalendarMonth((current) => {
-      const nextMonth = startOfMonth(createDateFromIso(isoDate))
-      if (
-        nextMonth.getFullYear() === current.getFullYear() &&
-        nextMonth.getMonth() === current.getMonth()
-      ) {
-        return current
-      }
-
-      return nextMonth
-    })
-    setCalendarAnchorEl(null)
+    userSelectionRef.current = true
+    appliedLatestIsoRef.current = null
+    applyDateSelection(isoDate)
   }
 
   const handleLatestGameClick = () => {
@@ -1048,7 +1271,9 @@ function App() {
       return
     }
 
-    handleDateSelect(latestGameIso)
+    userSelectionRef.current = false
+    appliedLatestIsoRef.current = latestGameIso
+    applyDateSelection(latestGameIso)
   }
 
   const outcomeColor =
