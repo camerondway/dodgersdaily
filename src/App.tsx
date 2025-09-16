@@ -395,21 +395,28 @@ const getPreviousDodgersDate = () => {
 const getPacificNow = () =>
   new Date(new Date().toLocaleString('en-US', { timeZone: 'America/Los_Angeles' }))
 
-const formatUpcomingGameDateTime = (isoDate: string) => {
+const getSystemTimeZone = () =>
+  Intl.DateTimeFormat().resolvedOptions().timeZone ?? 'UTC'
+
+const formatUpcomingGameDateTime = (isoDate: string, timeZone: string) => {
   const date = new Date(isoDate)
   const dateFormatter = new Intl.DateTimeFormat('en-US', {
     weekday: 'long',
     month: 'long',
     day: 'numeric',
-    timeZone: 'America/Los_Angeles',
+    timeZone,
   })
   const timeFormatter = new Intl.DateTimeFormat('en-US', {
     hour: 'numeric',
     minute: '2-digit',
-    timeZone: 'America/Los_Angeles',
+    timeZone,
+    timeZoneName: 'short',
   })
 
-  return `${dateFormatter.format(date)} at ${timeFormatter.format(date)} PT`
+  const datePart = dateFormatter.format(date)
+  const timePart = timeFormatter.format(date)
+
+  return `${datePart} at ${timePart}`
 }
 
 const ordinalRules = new Intl.PluralRules('en', { type: 'ordinal' })
@@ -618,9 +625,25 @@ function App() {
   const [latestGameIso, setLatestGameIso] = useState<string | null>(null)
   const [latestGameLoading, setLatestGameLoading] = useState(true)
   const [latestGameError, setLatestGameError] = useState<string | null>(null)
+  const [showDodgerBaseballButton, setShowDodgerBaseballButton] = useState(false)
+
+  const dodgerBaseballAudioRef = useRef<HTMLAudioElement | null>(null)
 
   const userSelectionRef = useRef<boolean>(Boolean(urlDate))
   const appliedLatestIsoRef = useRef<string | null>(null)
+
+  const systemTimeZone = useMemo(() => getSystemTimeZone(), [])
+
+  useEffect(() => {
+    const audio = new Audio('/dodger-baseball.mp3')
+    dodgerBaseballAudioRef.current = audio
+
+    return () => {
+      audio.pause()
+      audio.currentTime = 0
+      dodgerBaseballAudioRef.current = null
+    }
+  }, [])
 
   const selectedDisplayDate = useMemo(
     () => formatDisplayDate(selectedDateIso),
@@ -1056,7 +1079,10 @@ function App() {
 
         setNextGameDetails({
           isoDate: upcomingGame.gameDate,
-          displayDateTime: formatUpcomingGameDateTime(upcomingGame.gameDate),
+          displayDateTime: formatUpcomingGameDateTime(
+            upcomingGame.gameDate,
+            systemTimeZone,
+          ),
           opponent: opponentName,
           homeAway: dodgersAreHome ? 'home' : 'away',
           venue: upcomingGame.venue?.name,
@@ -1087,6 +1113,43 @@ function App() {
       controller.abort()
     }
   }, [refreshToken])
+
+  useEffect(() => {
+    if (!nextGameDetails) {
+      setShowDodgerBaseballButton(false)
+      return
+    }
+
+    if (typeof window === 'undefined') {
+      return
+    }
+
+    let active = true
+    const gameStart = new Date(nextGameDetails.isoDate)
+    if (Number.isNaN(gameStart.getTime())) {
+      setShowDodgerBaseballButton(false)
+      return
+    }
+
+    const updateVisibility = () => {
+      const now = getPacificNow()
+      const diffMinutes = (gameStart.getTime() - now.getTime()) / 60000
+      const withinWindow =
+        Number.isFinite(diffMinutes) && diffMinutes <= 20 && diffMinutes >= -10
+
+      if (active) {
+        setShowDodgerBaseballButton(withinWindow)
+      }
+    }
+
+    updateVisibility()
+    const intervalId = window.setInterval(updateVisibility, 30000)
+
+    return () => {
+      active = false
+      window.clearInterval(intervalId)
+    }
+  }, [nextGameDetails])
 
   useEffect(() => {
     let active = true
@@ -1365,6 +1428,21 @@ function App() {
   const handleRetry = () => {
     setRefreshToken((token) => token + 1)
   }
+
+  const handleDodgerBaseballClick = useCallback(() => {
+    const audio = dodgerBaseballAudioRef.current
+    if (!audio) {
+      return
+    }
+
+    audio.currentTime = 0
+    const playPromise = audio.play()
+    if (playPromise) {
+      playPromise.catch(() => {
+        // Playback can fail if the browser blocks it.
+      })
+    }
+  }, [])
 
   const handleCalendarButtonClick = (event: ReactMouseEvent<HTMLElement>) => {
     setCalendarAnchorEl((current) => (current ? null : event.currentTarget))
@@ -1721,6 +1799,18 @@ function App() {
                   : ''}
               </Typography>
             )}
+            
+              <Box display="flex" justifyContent="center" mt={2}>
+                <Button
+                  variant="contained"
+                  color="primary"
+                  onClick={handleDodgerBaseballClick}
+                  startIcon={<SportsBaseballIcon />}
+                >
+                  its time for dodger baseball!
+                </Button>
+              </Box>
+
             {dodgersStandingsText && (
               <Typography variant="h5" color="text.secondary">
                 {`Dodgers Record: ${dodgersStandingsText}`}
