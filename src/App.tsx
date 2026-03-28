@@ -202,7 +202,17 @@ type LeagueStandingsGroup = {
   divisions: DivisionStandingsGroup[]
 }
 
-const FINAL_STATUS_CODES = new Set(['F', 'FR', 'O', 'S', 'X'])
+type UpcomingGame = {
+  gamePk: number
+  gameDate: string
+  opponent: string
+  homeAway: 'home' | 'away'
+  venue?: string
+  statusText?: string
+  isCompleted: boolean
+}
+
+const FINAL_STATUS_CODES = new Set(['F', 'FR', 'O', 'X'])
 
 const pacificIsoFormatter = new Intl.DateTimeFormat('en-CA', {
   timeZone: 'America/Los_Angeles',
@@ -746,6 +756,9 @@ function App() {
   const [latestGameLoading, setLatestGameLoading] = useState(true)
   const [latestGameError, setLatestGameError] = useState<string | null>(null)
   const [showDodgerBaseballButton, setShowDodgerBaseballButton] = useState(false)
+  const [upcomingSchedule, setUpcomingSchedule] = useState<UpcomingGame[]>([])
+  const [scheduleLoading, setScheduleLoading] = useState(true)
+  const [scheduleError, setScheduleError] = useState<string | null>(null)
 
   const dodgerBaseballAudioRef = useRef<HTMLAudioElement | null>(null)
 
@@ -1193,10 +1206,8 @@ function App() {
         const scheduleData: ScheduleResponse = await response.json()
         const games =
           scheduleData.dates?.flatMap((date) => date.games ?? []) ?? []
-        const nowTime = Date.now()
         const upcomingGame = [...games]
           .filter((game) => !isCompletedGame(game))
-          .filter((game) => new Date(game.gameDate).getTime() >= nowTime)
           .sort(
             (a, b) =>
               new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime(),
@@ -1280,6 +1291,90 @@ function App() {
     }
 
     fetchNextGame()
+
+    return () => {
+      active = false
+      controller.abort()
+    }
+  }, [refreshToken, systemTimeZone])
+
+  useEffect(() => {
+    let active = true
+    const controller = new AbortController()
+
+    const fetchSchedule = async () => {
+      setScheduleLoading(true)
+      setScheduleError(null)
+
+      try {
+        const pacificNow = getPacificNow()
+        const startDate = new Intl.DateTimeFormat('en-CA', {
+          timeZone: 'America/Los_Angeles',
+        }).format(pacificNow)
+        const season = pacificNow.getFullYear()
+        const endDate = `${season}-10-31`
+
+        const response = await fetch(
+          `${SCHEDULE_ENDPOINT}?sportId=1&teamId=${DODGERS_TEAM_ID}&startDate=${startDate}&endDate=${endDate}`,
+          { signal: controller.signal },
+        )
+
+        if (!response.ok) {
+          throw new Error(`Schedule request failed (${response.status})`)
+        }
+
+        const scheduleData: ScheduleResponse = await response.json()
+        const games =
+          scheduleData.dates?.flatMap((date) => date.games ?? []) ?? []
+
+        const formatted: UpcomingGame[] = games
+          .sort(
+            (a, b) =>
+              new Date(a.gameDate).getTime() - new Date(b.gameDate).getTime(),
+          )
+          .map((game) => {
+            const dodgersAreHome = game.teams.home.team.id === DODGERS_TEAM_ID
+            const opponentTeam =
+              game.teams[dodgersAreHome ? 'away' : 'home'].team
+            return {
+              gamePk: game.gamePk,
+              gameDate: game.gameDate,
+              opponent:
+                opponentTeam?.teamName ??
+                opponentTeam?.name ??
+                'Opposing Team',
+              homeAway: dodgersAreHome ? 'home' : 'away',
+              venue: game.venue?.name,
+              statusText:
+                game.status?.detailedState ?? game.status?.abstractGameState,
+              isCompleted: isCompletedGame(game),
+            }
+          })
+
+        if (!active) {
+          return
+        }
+
+        setUpcomingSchedule(formatted)
+      } catch (err) {
+        if (!active) {
+          return
+        }
+
+        const error = err as Error
+        if (error.name === 'AbortError') {
+          return
+        }
+
+        setScheduleError(error.message)
+      } finally {
+        if (active) {
+          setScheduleLoading(false)
+        }
+      }
+    }
+
+    fetchSchedule()
 
     return () => {
       active = false
@@ -2289,6 +2384,95 @@ function App() {
                     </Box>
                   ))}
                 </Stack>
+              )}
+            </AccordionDetails>
+          </Accordion>
+          <Accordion>
+            <AccordionSummary
+              expandIcon={<ExpandMoreIcon />}
+              aria-controls="dodgers-schedule"
+              id="dodgers-schedule-header"
+            >
+              <Typography variant="h6" sx={{ flexGrow: 1 }}>
+                Dodgers Schedule
+              </Typography>
+              {!scheduleLoading && !scheduleError && (
+                <Typography variant="body2" color="text.secondary">
+                  {upcomingSchedule.length} game
+                  {upcomingSchedule.length !== 1 ? 's' : ''} remaining
+                </Typography>
+              )}
+            </AccordionSummary>
+            <AccordionDetails sx={{ p: 0 }}>
+              {scheduleLoading ? (
+                <Box display="flex" justifyContent="center" py={2}>
+                  <CircularProgress size={24} />
+                </Box>
+              ) : scheduleError ? (
+                <Box px={2} pb={2}>
+                  <Alert
+                    severity="error"
+                    action={
+                      <Button color="inherit" size="small" onClick={handleRetry}>
+                        Retry
+                      </Button>
+                    }
+                  >
+                    Unable to load the schedule. {scheduleError}
+                  </Alert>
+                </Box>
+              ) : upcomingSchedule.length === 0 ? (
+                <Box px={2} pb={2}>
+                  <Typography variant="body2" color="text.secondary">
+                    No remaining games found for this season.
+                  </Typography>
+                </Box>
+              ) : (
+                <TableContainer>
+                  <Table size="small" aria-label="Dodgers schedule">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>Date</TableCell>
+                        <TableCell>Opponent</TableCell>
+                        <TableCell>Time / Status</TableCell>
+                        <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
+                          Venue
+                        </TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {upcomingSchedule.map((game) => {
+                        const gameDate = new Date(game.gameDate)
+                        const dateStr = new Intl.DateTimeFormat('en-US', {
+                          weekday: 'short',
+                          month: 'short',
+                          day: 'numeric',
+                          timeZone: systemTimeZone,
+                        }).format(gameDate)
+                        const timeStr = game.isCompleted
+                          ? game.statusText ?? 'Final'
+                          : new Intl.DateTimeFormat('en-US', {
+                              hour: 'numeric',
+                              minute: '2-digit',
+                              timeZone: systemTimeZone,
+                              timeZoneName: 'short',
+                            }).format(gameDate)
+                        const opponentLabel = `${game.homeAway === 'home' ? 'vs' : '@'} ${game.opponent}`
+
+                        return (
+                          <TableRow key={game.gamePk} selected={game.isCompleted}>
+                            <TableCell>{dateStr}</TableCell>
+                            <TableCell>{opponentLabel}</TableCell>
+                            <TableCell>{timeStr}</TableCell>
+                            <TableCell sx={{ display: { xs: 'none', sm: 'table-cell' } }}>
+                              {game.venue ?? '--'}
+                            </TableCell>
+                          </TableRow>
+                        )
+                      })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
               )}
             </AccordionDetails>
           </Accordion>
